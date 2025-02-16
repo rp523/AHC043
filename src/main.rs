@@ -6377,8 +6377,8 @@ mod solver {
         ini_money: i64,
         near4: Vec<Vec<Vec<Pos>>>,
         around: Vec<Vec<Vec<Pos>>>,
-        com_field: [[Option<usize>; N]; N],
-        hub_reach_com: Vec<Vec<BTreeSet<usize>>>,
+        com_field: [[[Option<usize>; N]; N]; 2],
+        hub_reach_com: Vec<Vec<Vec<BTreeSet<usize>>>>,
     }
     impl Solver {
         pub fn new() -> Self {
@@ -6432,13 +6432,13 @@ mod solver {
                     }
                 }
             }
-            let mut com_field = [[None; N]; N];
-            let mut hub_reach_com = vec![vec![BTreeSet::new(); N]; N];
+            let mut com_field = [[[None; N]; N]; 2];
+            let mut hub_reach_com = vec![vec![vec![BTreeSet::new(); N]; N]; 2];
             for (i, com) in com.iter().enumerate() {
-                for com in com {
-                    com_field[com.y][com.x] = Some(i);
+                for (ci, com) in com.iter().enumerate() {
+                    com_field[ci][com.y][com.x] = Some(i);
                     for to in around[com.y][com.x].iter() {
-                        hub_reach_com[to.y][to.x].insert(i);
+                        hub_reach_com[ci][to.y][to.x].insert(i);
                     }
                 }
             }
@@ -6464,8 +6464,15 @@ mod solver {
                                 continue;
                             }
                             let mut ev = 0;
-                            for &i in
-                                self.hub_reach_com[y0][x0].intersection(&self.hub_reach_com[y1][x1])
+                            let i01 = self.hub_reach_com[0][y0][x0]
+                                .intersection(&self.hub_reach_com[1][y1][x1]);
+                            let i10 = self.hub_reach_com[1][y0][x0]
+                                .intersection(&self.hub_reach_com[0][y1][x1]);
+                            for &i in i01
+                                .into_iter()
+                                .chain(i10.into_iter())
+                                .collect::<BTreeSet<_>>()
+                                .into_iter()
                             {
                                 ev += self.fee[i];
                             }
@@ -6503,7 +6510,11 @@ mod solver {
                 }
                 for &p1 in self.near4[p0.y][p0.x].iter() {
                     let (delta, nxt_road) = if uf.same(p0.to_idx(), p1.to_idx()) {
-                        (0, road[p1.y][p1.x])
+                        match road[p1.y][p1.x] {
+                            Road::Hub => (0, Road::Hub),
+                            Road::Bridge => (COST_HUB, Road::Hub),
+                            Road::None => unreachable!(),
+                        }
                     } else {
                         match road[p1.y][p1.x] {
                             Road::Hub => (0, Road::Hub),
@@ -6582,7 +6593,6 @@ mod solver {
                     build.push((p, t));
                 }
             }
-
             Some((dist[t.y][t.x], build))
         }
         pub fn solve(&self) {
@@ -6615,28 +6625,6 @@ mod solver {
                 if pay <= 0 {
                     continue;
                 }
-                if false {
-                    debug!(p0, p1);
-                    let mut i0 = BTreeSet::new();
-                    for p in self.around[p0.y][p0.x].iter() {
-                        if let Some(i) = self.com_field[p.y][p.x] {
-                            i0.insert(i);
-                        }
-                    }
-                    let mut i1 = BTreeSet::new();
-                    for p in self.around[p1.y][p1.x].iter() {
-                        if let Some(i) = self.com_field[p.y][p.x] {
-                            i1.insert(i);
-                        }
-                    }
-                    debug!(i0, i1);
-                    for &i in i0.intersection(&i1) {
-                        debug!(i);
-                        debug!(self.com[i][0].y, self.com[i][0].x);
-                        debug!(self.com[i][1].y, self.com[i][1].x);
-                    }
-                    debug!(build);
-                }
                 // wait if needed
                 for _turn in now_turn..build_start {
                     ans.add_wait();
@@ -6651,6 +6639,7 @@ mod solver {
                     let p1 = build[ti].0;
                     uf.unite(p0.to_idx(), p1.to_idx());
                 }
+                now_money -= cost;
                 for &(pos, nroad) in build.iter() {
                     road[pos.y][pos.x] = if nroad == 0 { Road::Hub } else { Road::Bridge };
                     now_turn += 1;
@@ -6660,6 +6649,7 @@ mod solver {
                 now_money += income_delta;
                 income += income_delta;
                 score += pay;
+                now_turn += 1;
             }
             ans.answer();
             eprintln!("{score}");
