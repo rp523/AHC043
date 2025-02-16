@@ -5333,7 +5333,7 @@ mod deletable_binary_heap {
     use std::collections::BinaryHeap;
     #[derive(Clone)]
     pub struct DeletableBinaryHeap<T> {
-        que: BinaryHeap<T>,
+        pub que: BinaryHeap<T>,
         del_rsv: BinaryHeap<T>,
     }
     impl<T: Clone + PartialOrd + Ord> DeletableBinaryHeap<T> {
@@ -6595,15 +6595,21 @@ mod solver {
             }
             Some((dist[t.y][t.x], build))
         }
-        pub fn solve(&self) {
+        pub fn solve(mut self) {
             let mut score = 0;
             let mut hub_pairs = self.gen_hub_pairs();
+            let mut plan = hub_pairs
+                .que
+                .iter()
+                .map(|&(income_delta, ps)| (ps, income_delta))
+                .collect::<BTreeMap<(Pos, Pos), i64>>();
             let mut road = [[Road::None; N]; N];
             let mut uf = UnionFind::new(N * N);
             let mut now_turn = 0;
             let mut now_money = self.ini_money;
             let mut income = 0;
             let mut ans = Answer::new();
+            let mut al_con = vec![false; self.com.len()];
             while let Some((income_delta, (p0, p1))) = hub_pairs.pop() {
                 let Some((cost, build)) = self.connect(p0, p1, &road, &mut uf) else {
                     continue;
@@ -6644,6 +6650,44 @@ mod solver {
                     road[pos.y][pos.x] = if nroad == 0 { Road::Hub } else { Road::Bridge };
                     now_turn += 1;
                     now_money += income;
+                    if nroad == 0 {
+                        for i in 0..self.com.len() {
+                            if al_con[i] {
+                                continue;
+                            }
+                            let com0 = self.com[i][0];
+                            'srch: for &sta0 in self.around[com0.y][com0.x].iter() {
+                                let com1 = self.com[i][1];
+                                for &sta1 in self.around[com1.y][com1.x].iter() {
+                                    if uf.same(sta0.to_idx(), sta1.to_idx()) {
+                                        al_con[i] = true;
+                                        break 'srch;
+                                    }
+                                }
+                            }
+                            if al_con[i] {
+                                let com0 = self.com[i][0];
+                                for &sta0 in self.around[com0.y][com0.x].iter() {
+                                    let com1 = self.com[i][1];
+                                    for &sta1 in self.around[com1.y][com1.x].iter() {
+                                        if let Some(plan) = plan.get_mut(&(sta0, sta1)) {
+                                            let org = *plan;
+                                            *plan -= self.fee[i];
+                                            if (sta0, sta1) != (p0, p1) {
+                                                hub_pairs.remove(&(org, (sta0, sta1)));
+                                                hub_pairs.push((*plan, (sta0, sta1)));
+                                            }
+                                            for ci in 0..2 {
+                                                self.hub_reach_com[ci][self.com[i][ci].y]
+                                                    [self.com[i][ci].x]
+                                                    .remove(&i);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 ans.add(build);
                 now_money += income_delta;
