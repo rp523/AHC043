@@ -6459,7 +6459,7 @@ mod solver {
         }
         fn gen_hub_pairs(&self) -> DeletableBinaryHeap<(i64, (Pos, Pos))> {
             let mut sta_pairs = DeletableBinaryHeap::new();
-            const STEP: usize = 3;
+            const STEP: usize = 2;
             for y0 in (0..N).step_by(STEP) {
                 for x0 in (0..N).step_by(STEP) {
                     for y1 in (0..N).step_by(STEP) {
@@ -6508,7 +6508,7 @@ mod solver {
                 dist[s.y][s.x] = COST_HUB;
                 que.push((Reverse(COST_HUB), s));
             }
-            while let Some((Reverse(d0), p0)) = que.pop() {
+            'dijkstra: while let Some((Reverse(d0), p0)) = que.pop() {
                 if dist[p0.y][p0.x] != d0 {
                     continue;
                 }
@@ -6540,6 +6540,9 @@ mod solver {
                     if dist[p1.y][p1.x].chmin(d1) {
                         que.push((Reverse(d1), p1));
                         pre[p1.y][p1.x] = (p0, nxt_road);
+                        if p1 == t {
+                            break 'dijkstra;
+                        }
                     }
                 }
             }
