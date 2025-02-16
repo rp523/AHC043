@@ -6345,24 +6345,31 @@ mod solver {
         }
     }
     struct Answer {
-        rem: usize,
+        buf: Vec<Option<(Pos, usize)>>,
     }
     impl Answer {
         fn new() -> Self {
-            Self { rem: T }
+            Self { buf: vec![] }
         }
         fn add_wait(&mut self) {
-            println!("-1");
-            self.rem -= 1;
+            self.buf.push(None);
+            return;
         }
         fn add(&mut self, v: Vec<(Pos, usize)>) {
-            self.rem -= v.len();
-            for (pos, nroad) in v {
-                println!("{} {} {}", nroad, pos.y, pos.x);
+            for v in v {
+                self.buf.push(Some(v));
             }
         }
         fn answer(self) {
-            for _ in 0..self.rem {
+            let ln = self.buf.len();
+            for v in self.buf {
+                if let Some((pos, nroad)) = v {
+                    println!("{} {} {}", nroad, pos.y, pos.x);
+                } else {
+                    println!("-1");
+                }
+            }
+            for _ in 0..T - ln {
                 println!("-1");
             }
         }
@@ -6593,7 +6600,7 @@ mod solver {
             Some((dist[t.y][t.x], build, construct))
         }
         pub fn solve(mut self) {
-            let mut score = 0;
+            let mut score = self.ini_money;
             let mut hub_pairs = self.gen_hub_pairs();
             let mut plan = hub_pairs
                 .que
