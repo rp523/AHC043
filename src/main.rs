@@ -6338,34 +6338,31 @@ mod solver {
         fn to_idx(&self) -> usize {
             self.y * N + self.x
         }
+        fn dist(&self, other: &Self) -> i64 {
+            let dy = self.y as i64 - other.y as i64;
+            let dx = self.x as i64 - other.x as i64;
+            dy.abs() + dx.abs()
+        }
     }
     struct Answer {
-        buf: Vec<Option<Vec<(Pos, usize)>>>,
+        rem: usize,
     }
     impl Answer {
         fn new() -> Self {
-            Self { buf: vec![] }
+            Self { rem: T }
         }
         fn add_wait(&mut self) {
-            self.buf.push(None);
+            println!("-1");
+            self.rem -= 1;
         }
         fn add(&mut self, v: Vec<(Pos, usize)>) {
-            self.buf.push(Some(v));
+            self.rem -= v.len();
+            for (pos, nroad) in v {
+                println!("{} {} {}", nroad, pos.y, pos.x);
+            }
         }
         fn answer(self) {
-            let mut rem = T;
-            for v in self.buf {
-                let Some(v) = v else {
-                    println!("-1");
-                    rem -= 1;
-                    continue;
-                };
-                for (pos, nroad) in v {
-                    println!("{} {} {}", nroad, pos.y, pos.x);
-                    rem -= 1;
-                }
-            }
-            for _ in 0..rem {
+            for _ in 0..self.rem {
                 println!("-1");
             }
         }
@@ -6455,7 +6452,7 @@ mod solver {
         }
         fn gen_hub_pairs(&self) -> DeletableBinaryHeap<(i64, (Pos, Pos))> {
             let mut sta_pairs = DeletableBinaryHeap::new();
-            const STEP: usize = 2;
+            const STEP: usize = 3;
             for y0 in (0..N).step_by(STEP) {
                 for x0 in (0..N).step_by(STEP) {
                     for y1 in (0..N).step_by(STEP) {
@@ -6612,8 +6609,8 @@ mod solver {
             let mut al_con = vec![false; self.com.len()];
             let mut lc = 0;
             while let Some((income_delta, (p0, p1))) = hub_pairs.pop() {
+                assert_eq!(Some(income_delta), plan.remove(&(p0, p1)));
                 lc += 1;
-                debug!(lc, income_delta, p0, p1);
                 let Some((cost, build, construct)) = self.connect(p0, p1, &road, &mut uf) else {
                     continue;
                 };
@@ -6634,7 +6631,7 @@ mod solver {
                 if pay <= 0 {
                     continue;
                 }
-                debug!((p0, p1));
+                debug!(lc, now_turn, income_delta, p0, p1);
                 // wait if needed
                 for _turn in now_turn..build_start {
                     ans.add_wait();
@@ -6660,14 +6657,9 @@ mod solver {
                     if al_con[i] {
                         continue;
                     }
-                    let com0 = self.com[i][0];
-                    'srch: for &sta0 in self.around[com0.y][com0.x].iter() {
-                        let com1 = self.com[i][1];
-                        for &sta1 in self.around[com1.y][com1.x].iter() {
-                            if uf.same(sta0.to_idx(), sta1.to_idx()) {
-                                al_con[i] = true;
-                                break 'srch;
-                            }
+                    for ci in 0..2 {
+                        if self.com[i][ci].dist(&p0) <= 2 && self.com[i][ci ^ 1].dist(&p1) <= 2 {
+                            al_con[i] = true;
                         }
                     }
                     if al_con[i] {
@@ -6675,13 +6667,17 @@ mod solver {
                         for &sta0 in self.around[com0.y][com0.x].iter() {
                             let com1 = self.com[i][1];
                             for &sta1 in self.around[com1.y][com1.x].iter() {
+                                let (sta0, sta1) = if sta0 < sta1 {
+                                    (sta0, sta1)
+                                } else {
+                                    (sta1, sta0)
+                                };
                                 if let Some(plan) = plan.get_mut(&(sta0, sta1)) {
                                     let org = *plan;
                                     *plan -= self.fee[i];
                                     if (sta0, sta1) != (p0, p1) {
                                         hub_pairs.remove(&(org, (sta0, sta1)));
                                         hub_pairs.push((*plan, (sta0, sta1)));
-                                        debug!(sta0, sta1, org, *plan);
                                     }
                                     for ci in 0..2 {
                                         self.hub_reach_com[ci][self.com[i][ci].y]
