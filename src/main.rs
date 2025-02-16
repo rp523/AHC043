@@ -6650,39 +6650,37 @@ mod solver {
                     road[pos.y][pos.x] = if nroad == 0 { Road::Hub } else { Road::Bridge };
                     now_turn += 1;
                     now_money += income;
-                    if nroad == 0 {
-                        for i in 0..self.com.len() {
-                            if al_con[i] {
-                                continue;
+                }
+                for i in 0..self.com.len() {
+                    if al_con[i] {
+                        continue;
+                    }
+                    let com0 = self.com[i][0];
+                    'srch: for &sta0 in self.around[com0.y][com0.x].iter() {
+                        let com1 = self.com[i][1];
+                        for &sta1 in self.around[com1.y][com1.x].iter() {
+                            if uf.same(sta0.to_idx(), sta1.to_idx()) {
+                                al_con[i] = true;
+                                break 'srch;
                             }
-                            let com0 = self.com[i][0];
-                            'srch: for &sta0 in self.around[com0.y][com0.x].iter() {
-                                let com1 = self.com[i][1];
-                                for &sta1 in self.around[com1.y][com1.x].iter() {
-                                    if uf.same(sta0.to_idx(), sta1.to_idx()) {
-                                        al_con[i] = true;
-                                        break 'srch;
+                        }
+                    }
+                    if al_con[i] {
+                        let com0 = self.com[i][0];
+                        for &sta0 in self.around[com0.y][com0.x].iter() {
+                            let com1 = self.com[i][1];
+                            for &sta1 in self.around[com1.y][com1.x].iter() {
+                                if let Some(plan) = plan.get_mut(&(sta0, sta1)) {
+                                    let org = *plan;
+                                    *plan -= self.fee[i];
+                                    if (sta0, sta1) != (p0, p1) {
+                                        hub_pairs.remove(&(org, (sta0, sta1)));
+                                        hub_pairs.push((*plan, (sta0, sta1)));
                                     }
-                                }
-                            }
-                            if al_con[i] {
-                                let com0 = self.com[i][0];
-                                for &sta0 in self.around[com0.y][com0.x].iter() {
-                                    let com1 = self.com[i][1];
-                                    for &sta1 in self.around[com1.y][com1.x].iter() {
-                                        if let Some(plan) = plan.get_mut(&(sta0, sta1)) {
-                                            let org = *plan;
-                                            *plan -= self.fee[i];
-                                            if (sta0, sta1) != (p0, p1) {
-                                                hub_pairs.remove(&(org, (sta0, sta1)));
-                                                hub_pairs.push((*plan, (sta0, sta1)));
-                                            }
-                                            for ci in 0..2 {
-                                                self.hub_reach_com[ci][self.com[i][ci].y]
-                                                    [self.com[i][ci].x]
-                                                    .remove(&i);
-                                            }
-                                        }
+                                    for ci in 0..2 {
+                                        self.hub_reach_com[ci][self.com[i][ci].y]
+                                            [self.com[i][ci].x]
+                                            .remove(&i);
                                     }
                                 }
                             }
