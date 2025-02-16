@@ -6320,7 +6320,6 @@ mod solver {
     const T: usize = 800;
     const COST_HUB: i64 = 5000;
     const COST_BRIDGE: i64 = 100;
-    const DELTA4: [(i64, i64); 4] = [(0, -1), (0, 1), (-1, 0), (1, 0)];
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Road {
         None,
@@ -6406,10 +6405,15 @@ mod solver {
             let mut near4 = vec![vec![vec![]; N]; N];
             for y in 0..N {
                 for x in 0..N {
-                    for (dy, dx) in DELTA4.iter().copied() {
-                        let Some(y1) = y.move_delta(dy, 0, N - 1) else {continue;};
-                        let Some(x1) = x.move_delta(dx, 0, N - 1) else {continue;};
-                        near4[y][x].push(Pos::new(y1, x1));
+                    for dy in -1..=1i64 {
+                        for dx in -1..=1i64 {
+                            if dy.abs() + dx.abs() != 1 {
+                                continue;
+                            }
+                            let Some(y1) = y.move_delta(dy, 0, N - 1) else {continue;};
+                            let Some(x1) = x.move_delta(dx, 0, N - 1) else {continue;};
+                            near4[y][x].push(Pos::new(y1, x1));
+                        }
                     }
                 }
             }
@@ -6610,6 +6614,28 @@ mod solver {
                 let pay = (T - gain_start) as i64 * income_delta - cost;
                 if pay <= 0 {
                     continue;
+                }
+                if false {
+                    debug!(p0, p1);
+                    let mut i0 = BTreeSet::new();
+                    for p in self.around[p0.y][p0.x].iter() {
+                        if let Some(i) = self.com_field[p.y][p.x] {
+                            i0.insert(i);
+                        }
+                    }
+                    let mut i1 = BTreeSet::new();
+                    for p in self.around[p1.y][p1.x].iter() {
+                        if let Some(i) = self.com_field[p.y][p.x] {
+                            i1.insert(i);
+                        }
+                    }
+                    debug!(i0, i1);
+                    for &i in i0.intersection(&i1) {
+                        debug!(i);
+                        debug!(self.com[i][0].y, self.com[i][0].x);
+                        debug!(self.com[i][1].y, self.com[i][1].x);
+                    }
+                    debug!(build);
                 }
                 // wait if needed
                 for _turn in now_turn..build_start {
