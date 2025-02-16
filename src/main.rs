@@ -6361,16 +6361,21 @@ mod solver {
             }
         }
         fn answer(self) {
+            use std::io::Write;
+            let out = std::io::stdout();
+            let mut out = std::io::BufWriter::new(out.lock());
+            macro_rules! puts {($($format:tt)*) => (let _ = writeln!(out,$($format)*););}
+
             let ln = self.buf.len();
             for v in self.buf {
                 if let Some((pos, nroad)) = v {
-                    println!("{} {} {}", nroad, pos.y, pos.x);
+                    puts!("{} {} {}", nroad, pos.y, pos.x);
                 } else {
-                    println!("-1");
+                    puts!("-1");
                 }
             }
             for _ in 0..T - ln {
-                println!("-1");
+                puts!("-1");
             }
         }
     }
@@ -6458,37 +6463,58 @@ mod solver {
             }
         }
         fn gen_hub_pairs(&self) -> DeletableBinaryHeap<(i64, (Pos, Pos))> {
-            let mut sta_pairs = DeletableBinaryHeap::new();
             const STEP: usize = 2;
-            for y0 in (0..N).step_by(STEP) {
-                for x0 in (0..N).step_by(STEP) {
-                    for y1 in (0..N).step_by(STEP) {
-                        for x1 in (0..N).step_by(STEP) {
-                            if (y0, x0) >= (y1, x1) {
-                                continue;
+            let mut vs = vec![];
+            for hy in 0..N {
+                for hx in 0..N {
+                    let mut v = vec![BTreeSet::new(); 2];
+                    for p in self.around[hy][hx].iter() {
+                        for ci in 0..2 {
+                            if let Some(i) = self.com_field[ci][p.y][p.x] {
+                                v[ci].insert(i);
                             }
-                            let mut ev = 0;
-                            let i01 = self.hub_reach_com[0][y0][x0]
-                                .intersection(&self.hub_reach_com[1][y1][x1]);
-                            let i10 = self.hub_reach_com[1][y0][x0]
-                                .intersection(&self.hub_reach_com[0][y1][x1]);
-                            for &i in i01
-                                .into_iter()
-                                .chain(i10.into_iter())
-                                .collect::<BTreeSet<_>>()
-                                .into_iter()
-                            {
-                                ev += self.fee[i];
-                            }
-                            if ev == 0 {
-                                continue;
-                            }
-                            sta_pairs.push((ev, (Pos::new(y0, x0), Pos::new(y1, x1))));
                         }
+                    }
+                    if v.iter().all(|v| v.is_empty()) {
+                        continue;
+                    }
+                    vs.push((Pos::new(hy, hx), v));
+                }
+            }
+            vs.sort_by_cached_key(|(_pos, vs)| Reverse(vs.len()));
+            let mut val = vec![true; vs.len()];
+            for l in 0..N {
+                if !val[l] {
+                    continue;
+                }
+                for s in (0..N).skip(l + 1) {
+                    if (0..2).all(|ci| vs[s].1[ci].iter().all(|x| vs[l].1[ci].contains(x))) {
+                        val[s] = false;
                     }
                 }
             }
-            sta_pairs
+            let mut que = DeletableBinaryHeap::new();
+            let vs = vs
+                .into_iter()
+                .zip(val.into_iter())
+                .filter_map(|(x, b)| if b { Some(x) } else { None })
+                .collect_vec();
+            debug!(vs.len());
+            for (vi, (pa, va)) in vs.iter().enumerate() {
+                for (pb, vb) in vs.iter().skip(vi + 1) {
+                    let i01 = va[0].intersection(&vb[1]);
+                    let i10 = va[1].intersection(&vb[0]);
+                    let ev = i01
+                        .into_iter()
+                        .chain(i10.into_iter())
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .map(|&i| self.fee[i])
+                        .sum::<i64>();
+                    que.push((ev, (*pa, *pb)));
+                }
+            }
+            que
         }
         fn connect(
             &self,
@@ -6619,6 +6645,9 @@ mod solver {
             let mut al_con = vec![false; self.com.len()];
             let mut lc = 0;
             while let Some((income_delta, (p0, p1))) = hub_pairs.pop() {
+                if self.t0.elapsed().as_millis() > 1800 {
+                    break;
+                }
                 assert_eq!(Some(income_delta), plan.remove(&(p0, p1)));
                 lc += 1;
                 let Some((cost, build, construct)) = self.connect(p0, p1, &road, &mut uf) else {
