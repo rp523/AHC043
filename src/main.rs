@@ -6310,5 +6310,456 @@ use procon_reader::*;
 //////////////////////////////////////////////////////////////////////////////////////
 
 fn main() {
-    read::<usize>();
+    solver::Solver::new().solve();
+}
+
+mod solver {
+    use super::*;
+    use std::time::Instant;
+    const N: usize = 50;
+    const T: usize = 800;
+    const INF: usize = std::usize::MAX;
+    const LEFT: usize = 0;
+    const RIGHT: usize = 1;
+    const UPPER: usize = 2;
+    const LOWER: usize = 3;
+    const DELTAS: [(i64, i64); 4] = [(0, -1), (0, 1), (-1, 0), (1, 0)];
+    const COST_STA: i64 = 5000;
+    const COST_ROAD: i64 = 100;
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Road {
+        None,
+        Station,
+        LeftRight,
+        UpperLower,
+        LowerLeft,
+        UpperLeft,
+        UpperRight,
+        LowerRight,
+    }
+    impl Road {
+        fn trans_cost(&self, to: Self, dir: usize) -> Option<i64> {
+            match *self {
+                Self::LeftRight => {
+                    if dir != LEFT && dir != RIGHT {
+                        return None;
+                    }
+                }
+                Self::UpperLower => {
+                    if dir != UPPER && dir != LOWER {
+                        return None;
+                    }
+                }
+                Self::LowerLeft => {
+                    if dir != LOWER && dir != LEFT {
+                        return None;
+                    }
+                }
+                Self::UpperLeft => {
+                    if dir != UPPER && dir != LEFT {
+                        return None;
+                    }
+                }
+                Self::UpperRight => {
+                    if dir != UPPER && dir != RIGHT {
+                        return None;
+                    }
+                }
+                Self::LowerRight => {
+                    if dir != LOWER && dir != RIGHT {
+                        return None;
+                    }
+                }
+                _ => {}
+            }
+            match to {
+                Self::LeftRight => {
+                    if dir != RIGHT && dir != LEFT {
+                        return None;
+                    }
+                }
+                Self::UpperLower => {
+                    if dir != LOWER && dir != UPPER {
+                        return None;
+                    }
+                }
+                Self::LowerLeft => {
+                    if dir != UPPER && dir != RIGHT {
+                        return None;
+                    }
+                }
+                Self::UpperLeft => {
+                    if dir != LOWER && dir != RIGHT {
+                        return None;
+                    }
+                }
+                Self::UpperRight => {
+                    if dir != LOWER && dir != LEFT {
+                        return None;
+                    }
+                }
+                Self::LowerRight => {
+                    if dir != UPPER && dir != LEFT {
+                        return None;
+                    }
+                }
+                _ => {}
+            }
+            Some(match to {
+                Self::None => COST_ROAD,
+                _ => 0,
+            })
+        }
+    }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct Pos {
+        y: usize,
+        x: usize,
+    }
+    impl Pos {
+        fn empty() -> Self {
+            Self { y: 0, x: 0 }
+        }
+        fn new(y: usize, x: usize) -> Self {
+            Self { y, x }
+        }
+    }
+    fn intersection(a: &BTreeSet<usize>, b: &BTreeSet<usize>) -> BTreeSet<usize> {
+        let (a, b) = if a.len() < b.len() {
+            (&a, &b)
+        } else {
+            (&b, &a)
+        };
+        let mut ret = BTreeSet::new();
+        for &i in a.iter() {
+            if b.contains(&i) {
+                ret.insert(i);
+            }
+        }
+        ret
+    }
+    fn union(a: &BTreeSet<usize>, b: &BTreeSet<usize>) -> BTreeSet<usize> {
+        a.iter().chain(b.iter()).copied().collect::<_>()
+    }
+    pub struct Answer {
+        buf: Vec<(Pos, Road)>,
+    }
+    impl Answer {
+        fn new() -> Self {
+            Self { buf: vec![] }
+        }
+        fn add_empty(&mut self) {
+            self.buf.push((Pos::empty(), Road::None));
+        }
+        fn add(&mut self, construct: Vec<(Pos, Road)>) {
+            for x in construct {
+                self.buf.push(x);
+            }
+        }
+        fn answer(&self) {
+            for (pos, road) in self.buf.iter() {
+                let v = match road {
+                    Road::None => -1,
+                    Road::Station => 0,
+                    Road::LeftRight => 1,
+                    Road::UpperLower => 2,
+                    Road::LowerLeft => 3,
+                    Road::UpperLeft => 4,
+                    Road::UpperRight => 5,
+                    Road::LowerRight => 6,
+                };
+                if v < 0 {
+                    println!("-1");
+                } else {
+                    println!("{} {} {}", v, pos.y, pos.x);
+                }
+            }
+            for _ in 0..T - self.buf.len() {
+                println!("-1");
+            }
+        }
+    }
+    pub struct Solver {
+        t0: Instant,
+        src: Vec<Pos>,
+        dst: Vec<Pos>,
+        commute: Vec<i64>,
+        ini_money: i64,
+        reach: Vec<Vec<Vec<Pos>>>,
+    }
+    impl Solver {
+        pub fn new() -> Self {
+            let t0 = Instant::now();
+            let _n = read::<usize>();
+            let m = read::<usize>();
+            let ini_money = read::<i64>();
+            let _t = read::<usize>();
+            let mut src = vec![Pos::empty(); m];
+            let mut dst = vec![Pos::empty(); m];
+            src.iter_mut().zip(dst.iter_mut()).for_each(|(src, dst)| {
+                src.y = read::<usize>();
+                src.x = read::<usize>();
+                dst.y = read::<usize>();
+                dst.x = read::<usize>();
+            });
+            let commute = src
+                .iter()
+                .zip(dst.iter())
+                .map(|(src, dst)| {
+                    (src.y as i64 - dst.y as i64).abs() + (src.x as i64 - dst.x as i64).abs()
+                })
+                .collect_vec();
+            let reach = (0..N)
+                .map(|y| {
+                    (0..N)
+                        .map(|x| {
+                            let mut reach = vec![];
+                            for dy in -2i64..=2 {
+                                for dx in -2i64..=2 {
+                                    if dy.abs() + dx.abs() > 2 {
+                                        continue;
+                                    }
+                                    let Some(ny) = y.move_delta(dy, 0, N - 1) else {
+                                continue;
+                            };
+                                    let Some(nx) = x.move_delta(dx, 0, N - 1) else {
+                                continue;
+                            };
+                                    reach.push(Pos::new(ny, nx));
+                                }
+                            }
+                            reach
+                        })
+                        .collect_vec()
+                })
+                .collect_vec();
+            Self {
+                t0,
+                src,
+                dst,
+                commute,
+                ini_money,
+                reach,
+            }
+        }
+        fn move_cost(
+            s: Pos,
+            t: Pos,
+            road: &[[Road; N]; N],
+            idx: usize,
+            que: &mut BinaryHeap<(Reverse<i64>, Pos)>,
+            dist: &mut [[(usize, i64); N]; N],
+            pre: &mut [[Pos; N]; N],
+        ) -> Option<(i64, Vec<(Pos, Road)>)> {
+            que.clear();
+            que.push((Reverse(0), s));
+            dist[s.y][s.x] = (idx, 0);
+            'dijkstra: while let Some((Reverse(d0), pos0)) = que.pop() {
+                if dist[pos0.y][pos0.x] != (idx, d0) {
+                    continue;
+                }
+                for (dir, &(dy, dx)) in DELTAS.iter().enumerate() {
+                    let Some(y1) = pos0.y.move_delta(dy, 0, N - 1) else {
+                                                continue;
+                                            };
+                    let Some(x1) = pos0.x.move_delta(dx, 0, N - 1) else {
+                                                continue;
+                                            };
+                    let pos1 = Pos::new(y1, x1);
+                    let Some(delta) = road[pos0.y][pos0.x].trans_cost(road[pos1.y][pos1.x], dir) else {
+                                                continue;
+                                            };
+                    let d1 = d0 + delta;
+                    if dist[pos1.y][pos1.x].0 != idx || dist[pos1.y][pos1.x].1 > d1 {
+                        dist[pos1.y][pos1.x] = (idx, d1);
+                        que.push((Reverse(d1), pos1));
+                        pre[pos1.y][pos1.x] = pos0;
+                        if pos1 == t {
+                            break 'dijkstra;
+                        }
+                    }
+                }
+            }
+            if dist[t.y][t.x].0 != idx {
+                return None;
+            }
+            let mut cost = dist[t.y][t.x].1;
+            let mut construct = vec![];
+            let mut v = t;
+            loop {
+                let p = pre[v.y][v.x];
+                if p == s {
+                    break;
+                }
+                let pp = pre[p.y][p.x];
+                if road[p.y][p.x] == Road::None {
+                    let p2v = (v.y as i64 - p.y as i64, v.x as i64 - p.x as i64);
+                    let p2pp = (pp.y as i64 - p.y as i64, pp.x as i64 - p.x as i64);
+                    let psum = (p2v.0 + p2pp.0, p2v.1 + p2pp.1);
+                    let nroad = match psum {
+                        (-1, 1) => Road::UpperRight,
+                        (1, 1) => Road::LowerRight,
+                        (-1, -1) => Road::UpperLeft,
+                        (1, -1) => Road::LowerLeft,
+                        (0, 0) => {
+                            if p2v.0 != 0 {
+                                Road::UpperLower
+                            } else {
+                                debug_assert!(p2v.1 != 0);
+                                Road::LeftRight
+                            }
+                        }
+                        _ => unreachable!(),
+                    };
+                    construct.push((p, nroad));
+                }
+                v = p;
+            }
+            if road[s.y][s.x] != Road::Station {
+                cost += COST_STA;
+                construct.push((s, Road::Station));
+            }
+            if road[t.y][t.x] != Road::Station {
+                cost += COST_STA;
+                construct.push((t, Road::Station));
+            }
+            Some((cost, construct))
+        }
+        fn gen_station_cand(&self) -> Vec<Pos> {
+            let mut ret = vec![];
+            const STEP: usize = 8;
+            for y in (0..N).step_by(STEP) {
+                for x in (0..N).step_by(STEP) {
+                    ret.push(Pos::new(y, x));
+                }
+            }
+            ret
+        }
+        pub fn solve(&self) {
+            let mut ans = Answer::new();
+            let mut money = self.ini_money;
+            let mut income = 0;
+            let mut now = 0;
+            let mut road = [[Road::None; N]; N];
+            let mut score = 0;
+            let mut remain_src = [[None; N]; N];
+            let mut idx = 0;
+            let mut que = BinaryHeap::new();
+            let mut dist = [[(0, 0); N]; N];
+            let mut pre = [[Pos::empty(); N]; N];
+            for (i, src) in self.src.iter().enumerate() {
+                remain_src[src.y][src.x] = Some(i);
+            }
+            let mut remain_dst = [[None; N]; N];
+            for (i, dst) in self.dst.iter().enumerate() {
+                remain_dst[dst.y][dst.x] = Some(i);
+            }
+            let cand = self.gen_station_cand();
+            while now < T {
+                let mut best_plan = (0, 0, 0, vec![], BTreeSet::new());
+                for &sta0 in cand.iter() {
+                    let mut src0 = BTreeSet::new();
+                    let mut dst0 = BTreeSet::new();
+                    for pos in self.reach[sta0.y][sta0.x].iter() {
+                        if let Some(i) = remain_src[pos.y][pos.x] {
+                            src0.insert(i);
+                        } else if let Some(i) = remain_dst[pos.y][pos.x] {
+                            dst0.insert(i);
+                        }
+                    }
+                    // same station
+                    //todo!();
+                    // different station
+                    for &sta1 in cand.iter() {
+                        if sta1 <= sta0 {
+                            continue;
+                        }
+                        let mut src1 = BTreeSet::new();
+                        let mut dst1 = BTreeSet::new();
+                        for pos in self.reach[sta1.y][sta1.x].iter() {
+                            if let Some(i) = remain_src[pos.y][pos.x] {
+                                src1.insert(i);
+                            } else if let Some(i) = remain_dst[pos.y][pos.x] {
+                                dst1.insert(i);
+                            }
+                        }
+                        let new_con =
+                            union(&intersection(&src0, &dst1), &intersection(&src1, &dst0));
+                        if new_con.is_empty() {
+                            continue;
+                        }
+                        idx += 1;
+                        let Some((cost, construct)) = Self::move_cost(sta0, sta1, &road,
+                            idx,
+                            &mut que,
+                            &mut dist,
+                            &mut pre
+                        ) else {
+                                    continue;
+                                };
+                        let pay_time = T as i64 + 1 - (now + construct.len()) as i64;
+                        if pay_time <= 0 {
+                            continue;
+                        }
+                        let mut tmp_money = money;
+                        let mut ok = true;
+                        for &(_, rtype) in construct.iter() {
+                            debug_assert!(rtype != Road::None);
+                            if rtype == Road::Station {
+                                tmp_money -= COST_STA;
+                            } else {
+                                tmp_money -= COST_ROAD;
+                            }
+                            if tmp_money < 0 {
+                                ok = false;
+                                break;
+                            }
+                            tmp_money += income;
+                        }
+                        if !ok {
+                            continue;
+                        }
+                        let mut income_delta = 0;
+                        for &i in new_con.iter() {
+                            income_delta += self.commute[i];
+                        }
+                        let future_gain = -cost + income_delta * pay_time;
+                        if future_gain <= 0 {
+                            continue;
+                        }
+                        if best_plan.0 < future_gain {
+                            best_plan = (future_gain, cost, income_delta, construct, new_con);
+                        }
+                    }
+                }
+                let (future_gain, cost, income_delta, construct, new_con) = best_plan;
+                if future_gain > 0 {
+                    score += future_gain;
+                    money -= cost;
+                    money += income * construct.len() as i64;
+                    money += income_delta;
+                    income += income_delta;
+                    now += construct.len();
+                    for &(pos, t) in construct.iter() {
+                        road[pos.y][pos.x] = t;
+                    }
+                    for i in new_con {
+                        let src = self.src[i];
+                        let dst = self.dst[i];
+                        debug_assert_eq!(Some(i), remain_src[src.y][src.x]);
+                        debug_assert_eq!(Some(i), remain_dst[dst.y][dst.x]);
+                        remain_src[src.y][src.x] = None;
+                        remain_dst[dst.y][dst.x] = None;
+                    }
+                    ans.add(construct);
+                } else {
+                    money += income;
+                    now += 1;
+                    ans.add_empty();
+                }
+            }
+            ans.answer();
+            eprintln!("{score}");
+        }
+    }
 }
