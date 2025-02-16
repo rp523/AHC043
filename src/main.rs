@@ -6321,6 +6321,12 @@ mod solver {
     const COST_HUB: i64 = 5000;
     const COST_BRIDGE: i64 = 100;
     const DELTA4: [(i64, i64); 4] = [(0, -1), (0, 1), (-1, 0), (1, 0)];
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Road {
+        None,
+        Bridge,
+        Hub,
+    }
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
     struct Pos {
         y: usize,
@@ -6330,6 +6336,40 @@ mod solver {
         fn new(y: usize, x: usize) -> Self {
             Self { y, x }
         }
+        fn to_idx(&self) -> usize {
+            self.y * N + self.x
+        }
+    }
+    struct Answer {
+        buf: Vec<Option<Vec<(Pos, usize)>>>,
+    }
+    impl Answer {
+        fn new() -> Self {
+            Self { buf: vec![] }
+        }
+        fn add_wait(&mut self) {
+            self.buf.push(None);
+        }
+        fn add(&mut self, v: Vec<(Pos, usize)>) {
+            self.buf.push(Some(v));
+        }
+        fn answer(self) {
+            let mut rem = T;
+            for v in self.buf {
+                let Some(v) = v else {
+                    println!("-1");
+                    rem -= 1;
+                    continue;
+                };
+                for (pos, nroad) in v {
+                    println!("{} {} {}", nroad, pos.y, pos.x);
+                    rem -= 1;
+                }
+            }
+            for _ in 0..rem {
+                println!("-1");
+            }
+        }
     }
     pub struct Solver {
         t0: Instant,
@@ -6338,12 +6378,16 @@ mod solver {
         ini_money: i64,
         near4: Vec<Vec<Vec<Pos>>>,
         around: Vec<Vec<Vec<Pos>>>,
+        com_field: [[Option<usize>; N]; N],
+        hub_reach_com: Vec<Vec<BTreeSet<usize>>>,
     }
     impl Solver {
         pub fn new() -> Self {
             let t0 = Instant::now();
             let _n = read::<usize>();
             let m = read::<usize>();
+            let ini_money = read::<i64>();
+            let _t = read::<usize>();
             let com = (0..m)
                 .map(|_| {
                     (0..2)
@@ -6359,8 +6403,6 @@ mod solver {
                     dy.abs() + dx.abs()
                 })
                 .collect_vec();
-            let ini_money = read::<i64>();
-            let _t = read::<usize>();
             let mut near4 = vec![vec![vec![]; N]; N];
             for y in 0..N {
                 for x in 0..N {
@@ -6386,6 +6428,16 @@ mod solver {
                     }
                 }
             }
+            let mut com_field = [[None; N]; N];
+            let mut hub_reach_com = vec![vec![BTreeSet::new(); N]; N];
+            for (i, com) in com.iter().enumerate() {
+                for com in com {
+                    com_field[com.y][com.x] = Some(i);
+                    for to in around[com.y][com.x].iter() {
+                        hub_reach_com[to.y][to.x].insert(i);
+                    }
+                }
+            }
             Self {
                 t0,
                 com,
@@ -6393,8 +6445,198 @@ mod solver {
                 ini_money,
                 near4,
                 around,
+                com_field,
+                hub_reach_com,
             }
         }
-        pub fn solve(&self) {}
+        fn gen_hub_pairs(&self) -> DeletableBinaryHeap<(i64, (Pos, Pos))> {
+            let mut sta_pairs = DeletableBinaryHeap::new();
+            const STEP: usize = 2;
+            for y0 in (0..N).step_by(STEP) {
+                for x0 in (0..N).step_by(STEP) {
+                    for y1 in (0..N).step_by(STEP) {
+                        for x1 in (0..N).step_by(STEP) {
+                            if (y0, x0) >= (y1, x1) {
+                                continue;
+                            }
+                            let mut ev = 0;
+                            for &i in
+                                self.hub_reach_com[y0][x0].intersection(&self.hub_reach_com[y1][x1])
+                            {
+                                ev += self.fee[i];
+                            }
+                            if ev == 0 {
+                                continue;
+                            }
+                            sta_pairs.push((ev, (Pos::new(y0, x0), Pos::new(y1, x1))));
+                        }
+                    }
+                }
+            }
+            sta_pairs
+        }
+        fn connect(
+            &self,
+            s: Pos,
+            t: Pos,
+            road: &[[Road; N]; N],
+            uf: &mut UnionFind,
+        ) -> Option<(i64, Vec<(Pos, usize)>)> {
+            let mut que = BinaryHeap::new();
+            const INF: i64 = 1i64 << 60;
+            let mut dist = [[INF; N]; N];
+            let mut pre = [[(Pos::new(0, 0), Road::None); N]; N];
+            if road[s.y][s.x] == Road::Hub {
+                dist[s.y][s.x] = 0;
+                que.push((Reverse(0), s));
+            } else {
+                dist[s.y][s.x] = COST_HUB;
+                que.push((Reverse(COST_HUB), s));
+            }
+            while let Some((Reverse(d0), p0)) = que.pop() {
+                if dist[p0.y][p0.x] != d0 {
+                    continue;
+                }
+                for &p1 in self.near4[p0.y][p0.x].iter() {
+                    let (delta, nxt_road) = if uf.same(p0.to_idx(), p1.to_idx()) {
+                        (0, road[p1.y][p1.x])
+                    } else {
+                        match road[p1.y][p1.x] {
+                            Road::Hub => (0, Road::Hub),
+                            Road::Bridge => (COST_HUB, Road::Hub),
+                            Road::None => {
+                                if p1 == t {
+                                    if road[t.y][t.x] == Road::Hub {
+                                        (0, Road::Hub)
+                                    } else {
+                                        (COST_HUB, Road::Hub)
+                                    }
+                                } else {
+                                    (COST_BRIDGE, Road::Bridge)
+                                }
+                            }
+                        }
+                    };
+                    let d1 = d0 + delta;
+                    if dist[p1.y][p1.x].chmin(d1) {
+                        que.push((Reverse(d1), p1));
+                        pre[p1.y][p1.x] = (p0, nxt_road);
+                    }
+                }
+            }
+            if dist[t.y][t.x] == INF {
+                return None;
+            }
+            let mut construct = vec![];
+            let mut v = t;
+            while v != s {
+                let (pv, v_nxt) = pre[v.y][v.x];
+                construct.push((v, v_nxt));
+                v = pv;
+            }
+            construct.push((s, Road::Hub));
+            let mut build = vec![];
+            for i in 0..construct.len() {
+                let (p, nroad) = construct[i];
+                if i == 0 || i == construct.len() - 1 {
+                    debug_assert_eq!(Road::Hub, construct[i].1);
+                    if road[p.y][p.x] != Road::Hub {
+                        build.push((p, 0));
+                    }
+                    continue;
+                }
+                let t = if nroad == Road::Bridge {
+                    let pi = i - 1;
+                    let ni = i + 1;
+                    let dp = (
+                        construct[pi].0.y as i64 - construct[i].0.y as i64,
+                        construct[pi].0.x as i64 - construct[i].0.x as i64,
+                    );
+                    let dn = (
+                        construct[ni].0.y as i64 - construct[i].0.y as i64,
+                        construct[ni].0.x as i64 - construct[i].0.x as i64,
+                    );
+                    let dsum = (dp.0 + dn.0, dp.1 + dn.1);
+                    match dsum {
+                        (1, 1) => 6,
+                        (-1, 1) => 5,
+                        (1, -1) => 3,
+                        (-1, -1) => 4,
+                        (0, 0) => {
+                            if dp.0 != 0 {
+                                2
+                            } else {
+                                1
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                } else {
+                    0
+                };
+                if road[p.y][p.x] != nroad {
+                    build.push((p, t));
+                }
+            }
+
+            Some((dist[t.y][t.x], build))
+        }
+        pub fn solve(&self) {
+            let mut score = 0;
+            let mut hub_pairs = self.gen_hub_pairs();
+            let mut road = [[Road::None; N]; N];
+            let mut uf = UnionFind::new(N * N);
+            let mut now_turn = 0;
+            let mut now_money = self.ini_money;
+            let mut income = 0;
+            let mut ans = Answer::new();
+            while let Some((income_delta, (p0, p1))) = hub_pairs.pop() {
+                let Some((cost, build)) = self.connect(p0, p1, &road, &mut uf) else {
+                    continue;
+                };
+                if now_turn + build.len() > T {
+                    continue;
+                }
+                let build_start = if now_money >= cost {
+                    now_turn
+                } else if income == 0 {
+                    continue;
+                } else {
+                    // now_money + income * d >= cost
+                    let elapse = (cost - now_money + income - 1) / income;
+                    now_turn + elapse as usize
+                };
+                let gain_start = build_start + build.len() - 1;
+                let pay = (T - gain_start) as i64 * income_delta - cost;
+                if pay <= 0 {
+                    continue;
+                }
+                // wait if needed
+                for _turn in now_turn..build_start {
+                    ans.add_wait();
+                    now_turn += 1;
+                    now_money += income;
+                }
+                // execute
+                debug_assert!(now_turn < T);
+                debug_assert!(now_money >= cost);
+                for ti in 1..build.len() {
+                    let p0 = build[ti - 1].0;
+                    let p1 = build[ti].0;
+                    uf.unite(p0.to_idx(), p1.to_idx());
+                }
+                for &(pos, nroad) in build.iter() {
+                    road[pos.y][pos.x] = if nroad == 0 { Road::Hub } else { Road::Bridge };
+                    now_turn += 1;
+                    now_money += income;
+                }
+                ans.add(build);
+                now_money += income_delta;
+                income += income_delta;
+                score += pay;
+            }
+            ans.answer();
+            eprintln!("{score}");
+        }
     }
 }
