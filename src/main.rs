@@ -6492,7 +6492,7 @@ mod solver {
             t: Pos,
             road: &[[Road; N]; N],
             uf: &mut UnionFind,
-        ) -> Option<(i64, Vec<(Pos, usize)>)> {
+        ) -> Option<(i64, Vec<(Pos, usize)>, Vec<(Pos, Road)>)> {
             let mut que = BinaryHeap::new();
             const INF: i64 = 1i64 << 60;
             let mut dist = [[INF; N]; N];
@@ -6593,7 +6593,7 @@ mod solver {
                     build.push((p, t));
                 }
             }
-            Some((dist[t.y][t.x], build))
+            Some((dist[t.y][t.x], build, construct))
         }
         pub fn solve(mut self) {
             let mut score = 0;
@@ -6610,8 +6610,11 @@ mod solver {
             let mut income = 0;
             let mut ans = Answer::new();
             let mut al_con = vec![false; self.com.len()];
+            let mut lc = 0;
             while let Some((income_delta, (p0, p1))) = hub_pairs.pop() {
-                let Some((cost, build)) = self.connect(p0, p1, &road, &mut uf) else {
+                lc += 1;
+                debug!(lc, income_delta, p0, p1);
+                let Some((cost, build, construct)) = self.connect(p0, p1, &road, &mut uf) else {
                     continue;
                 };
                 if now_turn + build.len() > T {
@@ -6631,6 +6634,7 @@ mod solver {
                 if pay <= 0 {
                     continue;
                 }
+                debug!((p0, p1));
                 // wait if needed
                 for _turn in now_turn..build_start {
                     ans.add_wait();
@@ -6640,11 +6644,12 @@ mod solver {
                 // execute
                 debug_assert!(now_turn < T);
                 debug_assert!(now_money >= cost);
-                for ti in 1..build.len() {
-                    let p0 = build[ti - 1].0;
-                    let p1 = build[ti].0;
-                    uf.unite(p0.to_idx(), p1.to_idx());
+                for ti in 1..construct.len() {
+                    let con0 = construct[ti - 1].0;
+                    let con1 = construct[ti].0;
+                    uf.unite(con0.to_idx(), con1.to_idx());
                 }
+                debug_assert!(uf.same(p0.to_idx(), p1.to_idx()));
                 now_money -= cost;
                 for &(pos, nroad) in build.iter() {
                     road[pos.y][pos.x] = if nroad == 0 { Road::Hub } else { Road::Bridge };
@@ -6676,6 +6681,7 @@ mod solver {
                                     if (sta0, sta1) != (p0, p1) {
                                         hub_pairs.remove(&(org, (sta0, sta1)));
                                         hub_pairs.push((*plan, (sta0, sta1)));
+                                        debug!(sta0, sta1, org, *plan);
                                     }
                                     for ci in 0..2 {
                                         self.hub_reach_com[ci][self.com[i][ci].y]
@@ -6691,7 +6697,6 @@ mod solver {
                 now_money += income_delta;
                 income += income_delta;
                 score += pay;
-                now_turn += 1;
             }
             ans.answer();
             eprintln!("{score}");
