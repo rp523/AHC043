@@ -6543,12 +6543,11 @@ mod solver {
                 }
                 for &p1 in self.near4[p0.y][p0.x].iter() {
                     let (delta, nxt_road) = if uf.same(p0.to_idx(), p1.to_idx()) {
-                        match road[p1.y][p1.x] {
-                            Road::Hub => (0, Road::Hub),
-                            Road::Bridge => (COST_HUB, Road::Hub),
-                            Road::None => unreachable!(),
-                        }
+                        (0, road[p1.y][p1.x])
                     } else {
+                        if uf.group_size(p0.to_idx()) > 1 && road[p0.y][p0.x] != Road::Hub {
+                            continue;
+                        }
                         match road[p1.y][p1.x] {
                             Road::Hub => (0, Road::Hub),
                             Road::Bridge => (COST_HUB, Road::Hub),
@@ -6584,12 +6583,14 @@ mod solver {
             }
             construct.push((s, Road::Hub));
             let mut build = vec![];
+            let mut cost = 0;
             for i in 0..construct.len() {
                 let (p, nroad) = construct[i];
                 if i == 0 || i == construct.len() - 1 {
                     debug_assert_eq!(Road::Hub, construct[i].1);
                     if road[p.y][p.x] != Road::Hub {
                         build.push((p, 0));
+                        cost += COST_HUB;
                     }
                     continue;
                 }
@@ -6624,9 +6625,10 @@ mod solver {
                 };
                 if road[p.y][p.x] != nroad {
                     build.push((p, t));
+                    cost += COST_BRIDGE;
                 }
             }
-            Some((dist[t.y][t.x], build, construct))
+            Some((cost, build, construct))
         }
         pub fn solve(self) {
             let mut score = self.ini_money;
@@ -6644,11 +6646,26 @@ mod solver {
             let mut ans = Answer::new();
             let mut al_con = vec![false; self.com.len()];
             let mut lc = 0;
+            let mut covered = vec![vec![false; self.com.len()]; 2];
             while let Some((income_delta, (p0, p1))) = hub_pairs.pop() {
                 if self.t0.elapsed().as_millis() > 1800 {
                     break;
                 }
                 assert_eq!(Some(income_delta), plan.remove(&(p0, p1)));
+                if vec![p0, p1].iter().any(|p| {
+                    road[p.y][p.x] != Road::Hub
+                        && self.around[p.y][p.x].iter().all(|a| {
+                            (0..2).all(|ci| {
+                                if let Some(i) = self.com_field[ci][a.y][a.x] {
+                                    covered[ci][i]
+                                } else {
+                                    true
+                                }
+                            })
+                        })
+                }) {
+                    continue;
+                }
                 lc += 1;
                 let Some((cost, mut build, construct)) = self.connect(p0, p1, &road, &mut uf) else {
                     continue;
@@ -6680,7 +6697,10 @@ mod solver {
                 if pay <= 0 {
                     continue;
                 }
-                debug!(lc, now_turn, income_delta, p0, p1);
+                eprintln!(
+                    "{lc} t:{now_turn} money:{now_money} income:{income}+{income_delta}, cost:{cost} build_start:{build_start} {:?} {:?}",
+                    p0, p1
+                );
                 // wait if needed
                 for _turn in now_turn..build_start {
                     ans.add_wait();
@@ -6736,6 +6756,15 @@ mod solver {
                 now_money += income_delta;
                 income += income_delta;
                 score += pay;
+                vec![p0, p1].iter().for_each(|p| {
+                    self.around[p.y][p.x].iter().for_each(|a| {
+                        (0..2).for_each(|ci| {
+                            if let Some(i) = self.com_field[ci][a.y][a.x] {
+                                covered[ci][i] = true;
+                            }
+                        })
+                    })
+                });
             }
             ans.answer();
             eprintln!("{score}");
