@@ -6535,6 +6535,9 @@ mod solver {
                 que.push((Reverse(COST_HUB), s));
             }
             'dijkstra: while let Some((Reverse(d0), p0)) = que.pop() {
+                if p0 == t {
+                    break 'dijkstra;
+                }
                 if dist[p0.y][p0.x] != d0 {
                     continue;
                 }
@@ -6566,9 +6569,6 @@ mod solver {
                     if dist[p1.y][p1.x].chmin(d1) {
                         que.push((Reverse(d1), p1));
                         pre[p1.y][p1.x] = (p0, nxt_road);
-                        if p1 == t {
-                            break 'dijkstra;
-                        }
                     }
                 }
             }
@@ -6628,7 +6628,7 @@ mod solver {
             }
             Some((dist[t.y][t.x], build, construct))
         }
-        pub fn solve(mut self) {
+        pub fn solve(self) {
             let mut score = self.ini_money;
             let mut hub_pairs = self.gen_hub_pairs();
             let mut plan = hub_pairs
@@ -6650,19 +6650,29 @@ mod solver {
                 }
                 assert_eq!(Some(income_delta), plan.remove(&(p0, p1)));
                 lc += 1;
-                let Some((cost, build, construct)) = self.connect(p0, p1, &road, &mut uf) else {
+                let Some((cost, mut build, construct)) = self.connect(p0, p1, &road, &mut uf) else {
                     continue;
                 };
                 if now_turn + build.len() > T {
                     continue;
                 }
-                let build_start = if now_money >= cost {
+                build.sort_by_cached_key(|(_p, d)| Reverse(*d));
+                let dt2 = build.iter().filter(|(_, dir)| dir == &0).count() as i64;
+                let dt1 = build.len() as i64 - dt2;
+                let mut fall = 0;
+                fall.chmax(COST_BRIDGE);
+                fall.chmax(COST_BRIDGE + (COST_BRIDGE - income) * (dt1 - 1));
+                fall.chmax((COST_BRIDGE - income) * dt1 + COST_HUB);
+                fall.chmax(
+                    (COST_BRIDGE - income) * dt1 + COST_HUB + (COST_HUB - income) * (dt2 - 1),
+                );
+                let build_start = if now_money - fall >= 0 {
                     now_turn
                 } else if income == 0 {
                     continue;
                 } else {
                     // now_money + income * d >= cost
-                    let elapse = (cost - now_money + income - 1) / income;
+                    let elapse = (fall - now_money + income - 1) / income;
                     now_turn + elapse as usize
                 };
                 let gain_start = build_start + build.len() - 1;
@@ -6679,7 +6689,6 @@ mod solver {
                 }
                 // execute
                 debug_assert!(now_turn < T);
-                debug_assert!(now_money >= cost);
                 for ti in 1..construct.len() {
                     let con0 = construct[ti - 1].0;
                     let con1 = construct[ti].0;
@@ -6717,11 +6726,6 @@ mod solver {
                                     if (sta0, sta1) != (p0, p1) {
                                         hub_pairs.remove(&(org, (sta0, sta1)));
                                         hub_pairs.push((*plan, (sta0, sta1)));
-                                    }
-                                    for ci in 0..2 {
-                                        self.hub_reach_com[ci][self.com[i][ci].y]
-                                            [self.com[i][ci].x]
-                                            .remove(&i);
                                     }
                                 }
                             }
