@@ -6627,7 +6627,7 @@ mod solver {
                 let mut pay_max_upd = 0;
                 let mut action = None;
                 let mut dels = vec![];
-                for &(income_delta, (p0, p1)) in hub_pairs.iter().rev() {
+                for &(income_delta_min, (p0, p1)) in hub_pairs.iter().rev() {
                     if self.t0.elapsed().as_millis() > 2800 {
                         break 'main;
                     }
@@ -6643,7 +6643,7 @@ mod solver {
                                 })
                             })
                     }) {
-                        dels.push((income_delta, (p0, p1)));
+                        dels.push((income_delta_min, (p0, p1)));
                         continue;
                     }
                     lc += 1;
@@ -6717,26 +6717,31 @@ mod solver {
                         now_turn + elapse as usize
                     };
                     let gain_start = build_start + build.len() - 1;
-                    let pay = (T - gain_start) as i64 * income_delta - cost;
+                    let pay = (T - gain_start) as i64 * income_delta_min - cost;
                     if pay <= 0 {
                         continue;
                     }
                     if pay_max.chmax(pay) {
-                        action =
-                            Some(((income_delta, p0, p1), cost, build, build_start, construct));
+                        action = Some((
+                            (income_delta_min, p0, p1),
+                            cost,
+                            build,
+                            build_start,
+                            construct,
+                        ));
                     }
                     pay_max_upd += 1;
                     if pay_max_upd >= 128 {
                         break;
                     }
                 }
-                let Some(((income_delta, p0, p1), cost, build, build_start, construct)) = action
+                let Some(((income_delta_min, p0, p1), cost, build, build_start, construct)) = action
                 else {
                     eprintln!("{lc} no cand");
                     break;
                 };
                 eprintln!(
-                    "{lc} t:{now_turn} money:{now_money} income:{income}+{income_delta}, cost:{cost} build_start:{build_start} {:?} {:?}",
+                    "{lc} t:{now_turn} money:{now_money} income:{income}+{income_delta_min}, cost:{cost} build_start:{build_start} {:?} {:?}",
                     p0, p1
                 );
                 // wait if needed
@@ -6746,8 +6751,8 @@ mod solver {
                     now_money += income;
                 }
                 // execute
-                assert!(hub_pairs.remove(&(income_delta, (p0, p1))));
-                assert_eq!(Some(income_delta), hub_pairs_memo.remove(&(p0, p1)));
+                assert!(hub_pairs.remove(&(income_delta_min, (p0, p1))));
+                assert_eq!(Some(income_delta_min), hub_pairs_memo.remove(&(p0, p1)));
                 debug_assert!(now_turn < T);
                 for ti in 1..construct.len() {
                     let con0 = construct[ti - 1].0;
@@ -6761,16 +6766,29 @@ mod solver {
                     now_turn += 1;
                     now_money += income;
                 }
+                let mut income_delta = 0;
                 for i in 0..self.com.len() {
                     if al_con[i] {
                         continue;
                     }
-                    for ci in 0..2 {
-                        if self.com[i][ci].dist(&p0) <= 2 && self.com[i][ci ^ 1].dist(&p1) <= 2 {
-                            al_con[i] = true;
+                    let com0 = self.com[i][0];
+                    let com1 = self.com[i][1];
+                    'con_check: for &h0 in self.around[com0.y][com0.x].iter() {
+                        if road[h0.y][h0.x] != Road::Hub {
+                            continue;
+                        }
+                        for &h1 in self.around[com1.y][com1.x].iter() {
+                            if road[h1.y][h1.x] != Road::Hub {
+                                continue;
+                            }
+                            if uf.same(h0.to_idx(), h1.to_idx()) {
+                                al_con[i] = true;
+                                break 'con_check;
+                            }
                         }
                     }
                     if al_con[i] {
+                        income_delta += self.fee[i];
                         let com0 = self.com[i][0];
                         for &sta0 in self.around[com0.y][com0.x].iter() {
                             let com1 = self.com[i][1];
@@ -6791,10 +6809,11 @@ mod solver {
                         }
                     }
                 }
+                let gain_start = build_start + build.len() - 1;
                 ans.add(build);
                 now_money += income_delta;
                 income += income_delta;
-                score += pay_max;
+                score += (T - gain_start) as i64 * income_delta - cost;
                 vec![p0, p1].iter().for_each(|p| {
                     self.around[p.y][p.x].iter().for_each(|a| {
                         (0..2).for_each(|ci| {
