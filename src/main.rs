@@ -6320,6 +6320,8 @@ mod solver {
     const T: usize = 800;
     const COST_HUB: i64 = 5000;
     const COST_BRIDGE: i64 = 100;
+    const BEAM_WIDTH: usize = 10000;
+    const PROPOSE_NUM: usize = 100;
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Road {
         None,
@@ -6438,16 +6440,43 @@ mod solver {
             states
         }
         pub fn solve(&self) {
-            let mut dp = vec![self.initialize()];
-            loop {
-                let mut nxt = vec![];
-                for pre_state in dp.last().unwrap().iter() {
-                    for nxt_state in pre_state.propose_new_states(&self) {
-                        todo!()
+            let mut dp = vec![self.initialize().into_iter().map(|s| (s, 0)).collect_vec()];
+            let mut best = None;
+            let mut best_at = (0, 0);
+            for ti in 1.. {
+                let mut nxt = BinaryHeap::new();
+                for (pi, (pre_state, _)) in dp.last().unwrap().iter().enumerate() {
+                    for nstate in pre_state.propose_new_states(&self) {
+                        if nxt.len() < BEAM_WIDTH {
+                            nxt.push((Reverse(nstate), pi));
+                        } else {
+                            let (Reverse(pstate), _) = nxt.peek().unwrap();
+                            if &nstate > pstate {
+                                nxt.pop();
+                                nxt.push((Reverse(nstate), pi));
+                            } else {
+                                // do nothing
+                            }
+                        }
                     }
                 }
-                dp.push(nxt);
+                if nxt.is_empty() {
+                    break;
+                }
+                dp.push(
+                    nxt.into_iter()
+                        .map(|(Reverse(s), pi)| (s, pi))
+                        .collect_vec(),
+                );
+                for (i, (state, _)) in dp.last().unwrap().iter().enumerate() {
+                    if best.chmax(state.finance) {
+                        best_at = (ti, i);
+                    }
+                }
             }
+            let (ti, i) = best_at;
+            let (now, _pi) = dp[ti][i].clone();
+            eprintln!("{}", now.finance.score);
         }
     }
 
@@ -6455,14 +6484,47 @@ mod solver {
         use super::super::*;
         use super::*;
         use std::collections::{BinaryHeap, VecDeque};
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        pub struct Finance {
+            money: i64,
+            income: i64,
+            turn: usize,
+            pub score: i64,
+        }
+        impl PartialOrd for Finance {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                fn to_ord(finance: &Finance) -> (i64, i64, Reverse<usize>, i64) {
+                    (
+                        finance.score,
+                        finance.income,
+                        Reverse(finance.turn),
+                        finance.money,
+                    )
+                }
+                to_ord(self).partial_cmp(&to_ord(other))
+            }
+        }
+        impl Ord for Finance {
+            fn cmp(&self, other: &Self) -> Ordering {
+                self.partial_cmp(other).unwrap()
+            }
+        }
         #[derive(Clone, PartialEq, Eq)]
         pub struct State {
             hub_field: HubField,
             bridge_field: BridgeField,
             commute: Vec<FixedBitSet>,
-            money: i64,
-            income: i64,
-            turn: usize,
+            pub finance: Finance,
+        }
+        impl PartialOrd for State {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                self.finance.partial_cmp(&other.finance)
+            }
+        }
+        impl Ord for State {
+            fn cmp(&self, other: &Self) -> Ordering {
+                self.partial_cmp(other).unwrap()
+            }
         }
         impl State {
             pub fn new(ini_hub: Pos, solver: &Solver) -> Self {
@@ -6482,9 +6544,12 @@ mod solver {
                     hub_field,
                     bridge_field,
                     commute,
-                    money: 0,
-                    income: 0,
-                    turn: 0,
+                    finance: Finance {
+                        money: solver.ini_money - COST_HUB,
+                        income: 0,
+                        turn: 1,
+                        score: 0,
+                    },
                 }
             }
             pub fn propose_new_states(&self, solver: &Solver) -> Vec<State> {
@@ -6518,7 +6583,6 @@ mod solver {
                         }
                     }
                 }
-                const PROPOSE_NUM: usize = 10;
                 let mut to = BinaryHeap::new();
                 for y in 0..N {
                     for x in 0..N {
@@ -6544,17 +6608,19 @@ mod solver {
                                     .sum::<i64>()
                             })
                             .sum::<i64>();
-                        let pay = self.calc_pay(p, add_bridge_num, income_delta);
-                        if pay <= 0 {
+                        let Some(finance) = self.calc_finance(add_bridge_num, income_delta) else {
+                            continue;
+                        };
+                        if finance <= self.finance {
                             continue;
                         };
                         if to.len() < PROPOSE_NUM {
-                            to.push((Reverse(pay), p));
+                            to.push((Reverse(finance), p));
                         } else {
-                            let &(Reverse(pay0), _) = to.peek().unwrap();
-                            if pay0 < pay {
+                            let &(Reverse(finance0), _) = to.peek().unwrap();
+                            if finance0 < finance {
                                 to.pop();
-                                to.push((Reverse(pay), p));
+                                to.push((Reverse(finance), p));
                             } else {
                                 // do nothing
                             }
@@ -6562,49 +6628,68 @@ mod solver {
                     }
                 }
                 to.into_iter()
-                    .map(|(Reverse(pay), p)| {
+                    .map(|(Reverse(f), p)| {
                         let mut nstate = self.clone();
-                        nstate.hub_field.set(p);
-                        let mut v = p;
-                        loop {
-                            let pv = pre[v.y][v.x];
-                            if v == pv {
-                                break;
-                            }
-                            nstate.bridge_field.connect(pv, v);
-                            v = pv;
-                        }
-                        todo!();
+                        nstate.mutate(f, &pre, p);
                         nstate
                     })
                     .collect_vec()
             }
-            fn calc_pay(&self, p: Pos, add_bridge_num: i64, income_delta: i64) -> i64 {
+            fn mutate(&mut self, nxt_finance: Finance, pre: &[[Pos; N]; N], nxt_hub: Pos) {
+                self.hub_field.set(nxt_hub);
+                let mut v = nxt_hub;
+                loop {
+                    let pv = pre[v.y][v.x];
+                    if v == pv {
+                        break;
+                    }
+                    self.bridge_field.connect(pv, v);
+                    v = pv;
+                }
+                self.finance = nxt_finance;
+            }
+            fn calc_finance(&self, add_bridge_num: i64, income_delta: i64) -> Option<Finance> {
                 let mut fall = 0;
                 if add_bridge_num > 0 {
                     fall.chmax(COST_BRIDGE);
-                    fall.chmax(COST_BRIDGE + (COST_BRIDGE - self.income) * (add_bridge_num - 1));
+                    fall.chmax(
+                        COST_BRIDGE + (COST_BRIDGE - self.finance.income) * (add_bridge_num - 1),
+                    );
                 }
-                fall.chmax((COST_BRIDGE - self.income) * add_bridge_num + COST_HUB);
-                fall.chmax((COST_BRIDGE - self.income) * add_bridge_num + COST_HUB);
-                let build_start = if self.money - fall >= 0 {
-                    self.turn
-                } else if self.income == 0 {
-                    return -1;
+                fall.chmax((COST_BRIDGE - self.finance.income) * add_bridge_num + COST_HUB);
+                fall.chmax((COST_BRIDGE - self.finance.income) * add_bridge_num + COST_HUB);
+                let build_start = if self.finance.money - fall >= 0 {
+                    self.finance.turn
+                } else if self.finance.income == 0 {
+                    return None;
                 } else {
                     // now_money + income * d >= cost
-                    let elapse = (fall - self.money + self.income - 1) / self.income;
-                    self.turn + elapse as usize
+                    let elapse =
+                        (fall - self.finance.money + self.finance.income - 1) / self.finance.income;
+                    self.finance.turn + elapse as usize
                 };
                 let gain_start = build_start + add_bridge_num as usize;
+                let nxt_turn = gain_start + 1;
+                if nxt_turn >= T {
+                    return None;
+                }
                 let cost = add_bridge_num * COST_BRIDGE + COST_HUB;
-                (T - gain_start) as i64 * income_delta - cost
+                let pay = (T - gain_start) as i64 * income_delta - cost;
+                let mut nxt_money = self.finance.money;
+                nxt_money -= cost;
+                nxt_money += self.finance.income * (nxt_turn - self.finance.turn) as i64;
+                nxt_money += income_delta;
+                let nxt_income = self.finance.income + income_delta;
+                let nxt_score = self.finance.score + pay;
+                Some(Finance {
+                    money: nxt_money,
+                    income: nxt_income,
+                    turn: nxt_turn,
+                    score: nxt_score,
+                })
             }
             fn is_connected(&self, p0: Pos, p1: Pos) -> bool {
-                debug_assert_eq!(
-                    1,
-                    (p0.y as i64 - p1.y as i64).abs() + (p1.x as i64 - p1.x as i64).abs()
-                );
+                debug_assert_eq!(1, p0.dist(&p1));
                 if self.hub_field.has(p0) && self.hub_field.has(p1) {
                     true
                 } else {
