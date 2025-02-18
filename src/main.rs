@@ -6327,7 +6327,7 @@ mod solver {
         Hub,
     }
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-    struct Pos {
+    pub struct Pos {
         y: usize,
         x: usize,
     }
@@ -6344,41 +6344,6 @@ mod solver {
             dy.abs() + dx.abs()
         }
     }
-    struct Answer {
-        buf: Vec<Option<(Pos, usize)>>,
-    }
-    impl Answer {
-        fn new() -> Self {
-            Self { buf: vec![] }
-        }
-        fn add_wait(&mut self) {
-            self.buf.push(None);
-            return;
-        }
-        fn add(&mut self, v: Vec<(Pos, usize)>) {
-            for v in v {
-                self.buf.push(Some(v));
-            }
-        }
-        fn answer(self) {
-            use std::io::Write;
-            let out = std::io::stdout();
-            let mut out = std::io::BufWriter::new(out.lock());
-            macro_rules! puts {($($format:tt)*) => (let _ = writeln!(out,$($format)*););}
-
-            let ln = self.buf.len();
-            for v in self.buf {
-                if let Some((pos, nroad)) = v {
-                    puts!("{} {} {}", nroad, pos.y, pos.x);
-                } else {
-                    puts!("-1");
-                }
-            }
-            for _ in 0..T - ln {
-                puts!("-1");
-            }
-        }
-    }
     pub struct Solver {
         t0: Instant,
         com: Vec<Vec<Pos>>,
@@ -6387,7 +6352,6 @@ mod solver {
         near4: Vec<Vec<Vec<Pos>>>,
         around: Vec<Vec<Vec<Pos>>>,
         com_field: [[[Option<usize>; N]; N]; 2],
-        hub_reach_com: Vec<Vec<Vec<BTreeSet<usize>>>>,
     }
     impl Solver {
         pub fn new() -> Self {
@@ -6442,13 +6406,9 @@ mod solver {
                 }
             }
             let mut com_field = [[[None; N]; N]; 2];
-            let mut hub_reach_com = vec![vec![vec![BTreeSet::new(); N]; N]; 2];
             for (i, com) in com.iter().enumerate() {
                 for (ci, com) in com.iter().enumerate() {
                     com_field[ci][com.y][com.x] = Some(i);
-                    for to in around[com.y][com.x].iter() {
-                        hub_reach_com[ci][to.y][to.x].insert(i);
-                    }
                 }
             }
             Self {
@@ -6459,377 +6419,265 @@ mod solver {
                 near4,
                 around,
                 com_field,
-                hub_reach_com,
             }
         }
-        fn gen_hub_pairs(&self) -> BTreeSet<(i64, (Pos, Pos))> {
-            let mut ev = BTreeMap::new();
-            for (com, &fee) in self.com.iter().zip(self.fee.iter()) {
-                let p0 = com[0];
-                let p1 = com[1];
-                for &h0 in self.around[p0.y][p0.x].iter() {
-                    for &h1 in self.around[p1.y][p1.x].iter() {
-                        debug_assert!(h0 != h1);
-                        let (h0, h1) = if h0 < h1 { (h0, h1) } else { (h1, h0) };
-                        *ev.entry((h0, h1)).or_insert(0) += fee;
-                    }
-                }
-            }
-            ev.into_iter()
-                .map(|(ps, ev)| (ev, ps))
-                .collect::<BTreeSet<_>>()
-        }
-        fn calc_bridge_key(pre_pos: Pos, now_pos: Pos, nxt_pos: Pos) -> usize {
-            let dp = (
-                pre_pos.y as i64 - now_pos.y as i64,
-                pre_pos.x as i64 - now_pos.x as i64,
-            );
-            let dn = (
-                nxt_pos.y as i64 - now_pos.y as i64,
-                nxt_pos.x as i64 - now_pos.x as i64,
-            );
-            let dsum = (dp.0 + dn.0, dp.1 + dn.1);
-            match dsum {
-                (1, 1) => 6,
-                (-1, 1) => 5,
-                (1, -1) => 3,
-                (-1, -1) => 4,
-                (0, 0) => {
-                    if dp.0 != 0 {
-                        2
-                    } else {
-                        1
-                    }
-                }
-                _ => unreachable!(),
-            }
-        }
-        fn connect(
-            &self,
-            s: Pos,
-            t: Pos,
-            road: &[[Road; N]; N],
-            uf: &mut UnionFind,
-        ) -> Option<(i64, Vec<(Pos, usize)>, Vec<(Pos, Road)>)> {
-            let mut que = BinaryHeap::new();
-            const INF: i64 = 1i64 << 60;
-            let mut dist = [[INF; N]; N];
-            let mut pre = [[(Pos::new(0, 0), Road::None); N]; N];
-            if road[s.y][s.x] == Road::Hub {
-                dist[s.y][s.x] = 0;
-                que.push((Reverse(0), s));
-            } else {
-                dist[s.y][s.x] = COST_HUB;
-                que.push((Reverse(COST_HUB), s));
-            }
-            'dijkstra: while let Some((Reverse(d0), p0)) = que.pop() {
-                if p0 == t {
-                    break 'dijkstra;
-                }
-                if dist[p0.y][p0.x] != d0 {
-                    continue;
-                }
-                for &p1 in self.near4[p0.y][p0.x].iter() {
-                    let (delta, nxt_road) = if uf.same(p0.to_idx(), p1.to_idx()) {
-                        if p1 == t {
-                            if road[p1.y][p1.x] == Road::Hub {
-                                (0, Road::Hub)
-                            } else {
-                                (COST_HUB, Road::Hub)
-                            }
-                        } else {
-                            (0, road[p1.y][p1.x])
-                        }
-                    } else {
-                        if uf.group_size(p0.to_idx()) > 1 && road[p0.y][p0.x] != Road::Hub {
-                            continue;
-                        }
-                        match road[p1.y][p1.x] {
-                            Road::Hub => (0, Road::Hub),
-                            Road::Bridge => (COST_HUB, Road::Hub),
-                            Road::None => {
-                                if p1 == t {
-                                    if road[t.y][t.x] == Road::Hub {
-                                        (0, Road::Hub)
-                                    } else {
-                                        (COST_HUB, Road::Hub)
-                                    }
-                                } else {
-                                    (COST_BRIDGE, Road::Bridge)
-                                }
-                            }
-                        }
-                    };
-                    let d1 = d0 + delta;
-                    if dist[p1.y][p1.x].chmin(d1) {
-                        que.push((Reverse(d1), p1));
-                        pre[p1.y][p1.x] = (p0, nxt_road);
-                    }
-                }
-            }
-            if dist[t.y][t.x] == INF {
-                return None;
-            }
-            let mut construct = vec![];
-            let mut v = t;
-            while v != s {
-                let (pv, v_nxt) = pre[v.y][v.x];
-                construct.push((v, v_nxt));
-                v = pv;
-            }
-            construct.push((s, Road::Hub));
-            construct.reverse();
-            let mut build = vec![];
-            let mut cost = 0;
-            for i in 0..construct.len() {
-                let (p, nroad) = construct[i];
-                if i == 0 || i == construct.len() - 1 {
-                    debug_assert_eq!(Road::Hub, construct[i].1);
-                    if road[p.y][p.x] != Road::Hub {
-                        build.push((p, 0));
-                        cost += COST_HUB;
-                    }
-                    continue;
-                }
-                let t = if nroad == Road::Bridge {
-                    let pi = i - 1;
-                    let ni = i + 1;
-                    Self::calc_bridge_key(construct[pi].0, construct[i].0, construct[ni].0)
-                } else {
-                    0
-                };
-                if road[p.y][p.x] != nroad {
-                    build.push((p, t));
-                    cost += COST_BRIDGE;
-                }
-            }
-            Some((cost, build, construct))
-        }
-        pub fn solve(self) {
-            let mut score = self.ini_money;
-            let mut hub_pairs = self.gen_hub_pairs();
-            eprintln!("ini_pair:{}", hub_pairs.len());
-            let mut hub_pairs_memo = hub_pairs
-                .iter()
-                .map(|&(income_delta, ps)| (ps, income_delta))
-                .collect::<BTreeMap<(Pos, Pos), i64>>();
-            let mut road = [[Road::None; N]; N];
-            let mut uf = UnionFind::new(N * N);
-            let mut now_turn = 0;
-            let mut now_money = self.ini_money;
-            let mut income = 0;
-            let mut ans = Answer::new();
-            let mut al_con = vec![false; self.com.len()];
-            let mut lc = 0;
-            let mut covered = vec![vec![false; self.com.len()]; 2];
-            'main: while now_turn < T {
-                let mut pay_max = 0;
-                let mut pay_max_upd = 0;
-                let mut action = None;
-                let mut dels = vec![];
-                for &(income_delta_min, (p0, p1)) in hub_pairs.iter().rev() {
-                    if self.t0.elapsed().as_millis() > 2800 {
-                        break 'main;
-                    }
-                    if vec![p0, p1].iter().any(|p| {
-                        road[p.y][p.x] != Road::Hub
-                            && self.around[p.y][p.x].iter().all(|a| {
-                                (0..2).all(|ci| {
-                                    if let Some(i) = self.com_field[ci][a.y][a.x] {
-                                        covered[ci][i]
-                                    } else {
-                                        true
-                                    }
-                                })
-                            })
+        fn initialize(&self) -> Vec<State> {
+            let mut states = vec![];
+            for hy in 0..N {
+                for hx in 0..N {
+                    if (0..2).any(|ci| {
+                        self.around[hy][hx]
+                            .iter()
+                            .any(|p| self.com_field[ci][p.y][p.x].is_some())
                     }) {
-                        dels.push((income_delta_min, (p0, p1)));
-                        continue;
+                        let state = State::new(Pos::new(hy, hx), &self);
+                        states.push(state);
                     }
-                    lc += 1;
-                    let con = if now_turn > 0 {
-                        self.connect(p0, p1, &road, &mut uf)
-                    } else {
-                        let cost = (p0.dist(&p1) - 1) * COST_BRIDGE + 2 * COST_HUB;
-                        if cost > now_money {
-                            continue;
-                        }
-                        let mut construct = vec![(p0, Road::Hub)];
-                        let mut v = p0;
-                        while v.y < p1.y {
-                            v.y += 1;
-                            construct.push((v, Road::Bridge));
-                        }
-                        while v.y > p1.y {
-                            v.y -= 1;
-                            construct.push((v, Road::Bridge));
-                        }
-                        while v.x < p1.x {
-                            v.x += 1;
-                            construct.push((v, Road::Bridge));
-                        }
-                        while v.x > p1.x {
-                            v.x -= 1;
-                            construct.push((v, Road::Bridge));
-                        }
-                        construct.last_mut().unwrap().1 = Road::Hub;
-                        let build = (0..construct.len())
-                            .map(|i| {
-                                if i == 0 || i == construct.len() - 1 {
-                                    (construct[i].0, 0)
-                                } else {
-                                    (
-                                        construct[i].0,
-                                        Self::calc_bridge_key(
-                                            construct[i - 1].0,
-                                            construct[i].0,
-                                            construct[i + 1].0,
-                                        ),
-                                    )
-                                }
-                            })
-                            .collect_vec();
-                        Some((cost, build, construct))
-                    };
-                    let Some((cost, mut build, construct)) = con else {
-                        continue;
-                    };
-                    if now_turn + build.len() > T {
-                        continue;
-                    }
-                    build.sort_by_cached_key(|(_p, d)| Reverse(*d));
-                    let dt2 = build.iter().filter(|(_, dir)| dir == &0).count() as i64;
-                    let dt1 = build.len() as i64 - dt2;
-                    let mut fall = 0;
-                    fall.chmax(COST_BRIDGE);
-                    fall.chmax(COST_BRIDGE + (COST_BRIDGE - income) * (dt1 - 1));
-                    fall.chmax((COST_BRIDGE - income) * dt1 + COST_HUB);
-                    fall.chmax(
-                        (COST_BRIDGE - income) * dt1 + COST_HUB + (COST_HUB - income) * (dt2 - 1),
-                    );
-                    let build_start = if now_money - fall >= 0 {
-                        now_turn
-                    } else if income == 0 {
-                        continue;
-                    } else {
-                        // now_money + income * d >= cost
-                        let elapse = (fall - now_money + income - 1) / income;
-                        now_turn + elapse as usize
-                    };
-                    let gain_start = build_start + build.len() - 1;
-                    let pay = (T - gain_start) as i64 * income_delta_min - cost;
-                    if pay <= 0 {
-                        continue;
-                    }
-                    if pay_max.chmax(pay) {
-                        action = Some((
-                            (income_delta_min, p0, p1),
-                            cost,
-                            build,
-                            build_start,
-                            construct,
-                        ));
-                    }
-                    pay_max_upd += 1;
-                    if pay_max_upd >= 128 {
-                        break;
-                    }
-                }
-                let Some(((income_delta_min, p0, p1), cost, build, build_start, construct)) = action
-                else {
-                    eprintln!("{lc} no cand");
-                    break;
-                };
-                eprintln!(
-                    "{lc} t:{now_turn} money:{now_money} income:{income}+{income_delta_min}, cost:{cost} build_start:{build_start} {:?} {:?}",
-                    p0, p1
-                );
-                // wait if needed
-                for _turn in now_turn..build_start {
-                    ans.add_wait();
-                    now_turn += 1;
-                    now_money += income;
-                }
-                // execute
-                assert!(hub_pairs.remove(&(income_delta_min, (p0, p1))));
-                assert_eq!(Some(income_delta_min), hub_pairs_memo.remove(&(p0, p1)));
-                debug_assert!(now_turn < T);
-                for ti in 1..construct.len() {
-                    let con0 = construct[ti - 1].0;
-                    let con1 = construct[ti].0;
-                    uf.unite(con0.to_idx(), con1.to_idx());
-                }
-                debug_assert!(uf.same(p0.to_idx(), p1.to_idx()));
-                now_money -= cost;
-                for &(pos, nroad) in build.iter() {
-                    road[pos.y][pos.x] = if nroad == 0 { Road::Hub } else { Road::Bridge };
-                    now_turn += 1;
-                    now_money += income;
-                }
-                let mut income_delta = 0;
-                for i in 0..self.com.len() {
-                    if al_con[i] {
-                        continue;
-                    }
-                    let com0 = self.com[i][0];
-                    let com1 = self.com[i][1];
-                    'con_check: for &h0 in self.around[com0.y][com0.x].iter() {
-                        if road[h0.y][h0.x] != Road::Hub {
-                            continue;
-                        }
-                        for &h1 in self.around[com1.y][com1.x].iter() {
-                            if road[h1.y][h1.x] != Road::Hub {
-                                continue;
-                            }
-                            if uf.same(h0.to_idx(), h1.to_idx()) {
-                                al_con[i] = true;
-                                break 'con_check;
-                            }
-                        }
-                    }
-                    if al_con[i] {
-                        income_delta += self.fee[i];
-                        let com0 = self.com[i][0];
-                        for &sta0 in self.around[com0.y][com0.x].iter() {
-                            let com1 = self.com[i][1];
-                            for &sta1 in self.around[com1.y][com1.x].iter() {
-                                let (sta0, sta1) = if sta0 < sta1 {
-                                    (sta0, sta1)
-                                } else {
-                                    (sta1, sta0)
-                                };
-                                if let Some(plan) = hub_pairs_memo.get_mut(&(sta0, sta1)) {
-                                    let org = *plan;
-                                    *plan -= self.fee[i];
-                                    if hub_pairs.remove(&(org, (sta0, sta1))) {
-                                        hub_pairs.insert((*plan, (sta0, sta1)));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                let gain_start = build_start + build.len() - 1;
-                ans.add(build);
-                now_money += income_delta;
-                income += income_delta;
-                score += (T - gain_start) as i64 * income_delta - cost;
-                vec![p0, p1].iter().for_each(|p| {
-                    self.around[p.y][p.x].iter().for_each(|a| {
-                        (0..2).for_each(|ci| {
-                            if let Some(i) = self.com_field[ci][a.y][a.x] {
-                                covered[ci][i] = true;
-                            }
-                        })
-                    })
-                });
-                for (del_delta, dps) in dels {
-                    hub_pairs.remove(&(del_delta, dps));
-                    hub_pairs_memo.remove(&dps);
                 }
             }
-            ans.answer();
-            eprintln!("{score}");
+            states
+        }
+        pub fn solve(&self) {
+            let mut dp = vec![self.initialize()];
+            loop {
+                let mut nxt = vec![];
+                for pre_state in dp.last().unwrap().iter() {
+                    for nxt_state in pre_state.propose_new_states(&self) {
+                        todo!()
+                    }
+                }
+                dp.push(nxt);
+            }
         }
     }
+
+    mod state {
+        use super::super::*;
+        use super::*;
+        use std::collections::{BinaryHeap, VecDeque};
+        #[derive(Clone, PartialEq, Eq)]
+        pub struct State {
+            hub_field: HubField,
+            bridge_field: BridgeField,
+            commute: Vec<FixedBitSet>,
+            money: i64,
+            income: i64,
+            turn: usize,
+        }
+        impl State {
+            pub fn new(ini_hub: Pos, solver: &Solver) -> Self {
+                let mut hub_field = HubField::new();
+                hub_field.set(ini_hub);
+                let mut commute = vec![FixedBitSet::with_capacity(solver.com.len()); 2];
+                for &p in solver.around[ini_hub.y][ini_hub.x].iter() {
+                    for ci in 0..2 {
+                        let Some(i) = solver.com_field[ci][p.y][p.x] else {
+                            continue;
+                        };
+                        commute[ci].set(i, true);
+                    }
+                }
+                let bridge_field = BridgeField::new();
+                Self {
+                    hub_field,
+                    bridge_field,
+                    commute,
+                    money: 0,
+                    income: 0,
+                    turn: 0,
+                }
+            }
+            pub fn propose_new_states(&self, solver: &Solver) -> Vec<State> {
+                let mut que = VecDeque::new();
+                const INF: i64 = 1i64 << 60;
+                let mut dist = [[INF; N]; N];
+                let mut pre = [[Pos::new(0, 0); N]; N];
+                for y in 0..N {
+                    for x in 0..N {
+                        let ini = Pos::new(y, x);
+                        if !self.hub_field.has(ini) {
+                            continue;
+                        }
+                        que.push_back(ini);
+                        dist[ini.y][ini.x] = 0;
+                        pre[ini.y][ini.x] = ini;
+                    }
+                }
+                while let Some(p0) = que.pop_front() {
+                    let d0 = dist[p0.y][p0.x];
+                    for &p1 in solver.near4[p0.y][p0.x].iter() {
+                        let delta = if self.is_connected(p0, p1) { 0 } else { 1 };
+                        let d1 = d0 + delta;
+                        if dist[p1.y][p0.x].chmin(d1) {
+                            if delta == 0 {
+                                que.push_front(p1);
+                            } else {
+                                que.push_back(p1);
+                            }
+                            pre[p1.y][p1.x] = p0;
+                        }
+                    }
+                }
+                const PROPOSE_NUM: usize = 10;
+                let mut to = BinaryHeap::new();
+                for y in 0..N {
+                    for x in 0..N {
+                        let p = Pos::new(y, x);
+                        if self.hub_field.has(p) || dist[y][x] == INF {
+                            continue;
+                        }
+                        let add_bridge_num = max(dist[p.y][p.x] - 1, 0);
+                        let income_delta = (0..2)
+                            .map(|ci| {
+                                solver.around[p.y][p.x]
+                                    .iter()
+                                    .filter_map(|np| solver.com_field[ci][np.y][np.x])
+                                    .map(|i| {
+                                        if !self.commute[ci].contains(i)
+                                            && self.commute[ci ^ 1].contains(i)
+                                        {
+                                            solver.fee[i]
+                                        } else {
+                                            0
+                                        }
+                                    })
+                                    .sum::<i64>()
+                            })
+                            .sum::<i64>();
+                        let pay = self.calc_pay(p, add_bridge_num, income_delta);
+                        if pay <= 0 {
+                            continue;
+                        };
+                        if to.len() < PROPOSE_NUM {
+                            to.push((Reverse(pay), p));
+                        } else {
+                            let &(Reverse(pay0), _) = to.peek().unwrap();
+                            if pay0 < pay {
+                                to.pop();
+                                to.push((Reverse(pay), p));
+                            } else {
+                                // do nothing
+                            }
+                        }
+                    }
+                }
+                to.into_iter()
+                    .map(|(Reverse(pay), p)| {
+                        let mut nstate = self.clone();
+                        nstate.hub_field.set(p);
+                        let mut v = p;
+                        loop {
+                            let pv = pre[v.y][v.x];
+                            if v == pv {
+                                break;
+                            }
+                            nstate.bridge_field.connect(pv, v);
+                            v = pv;
+                        }
+                        todo!();
+                        nstate
+                    })
+                    .collect_vec()
+            }
+            fn calc_pay(&self, p: Pos, add_bridge_num: i64, income_delta: i64) -> i64 {
+                let mut fall = 0;
+                if add_bridge_num > 0 {
+                    fall.chmax(COST_BRIDGE);
+                    fall.chmax(COST_BRIDGE + (COST_BRIDGE - self.income) * (add_bridge_num - 1));
+                }
+                fall.chmax((COST_BRIDGE - self.income) * add_bridge_num + COST_HUB);
+                fall.chmax((COST_BRIDGE - self.income) * add_bridge_num + COST_HUB);
+                let build_start = if self.money - fall >= 0 {
+                    self.turn
+                } else if self.income == 0 {
+                    return -1;
+                } else {
+                    // now_money + income * d >= cost
+                    let elapse = (fall - self.money + self.income - 1) / self.income;
+                    self.turn + elapse as usize
+                };
+                let gain_start = build_start + add_bridge_num as usize;
+                let cost = add_bridge_num * COST_BRIDGE + COST_HUB;
+                (T - gain_start) as i64 * income_delta - cost
+            }
+            fn is_connected(&self, p0: Pos, p1: Pos) -> bool {
+                debug_assert_eq!(
+                    1,
+                    (p0.y as i64 - p1.y as i64).abs() + (p1.x as i64 - p1.x as i64).abs()
+                );
+                if self.hub_field.has(p0) && self.hub_field.has(p1) {
+                    true
+                } else {
+                    self.bridge_field.is_bridged(p0, p1)
+                }
+            }
+            fn is_bridge(&self, p: Pos, solver: &Solver) -> bool {
+                for &np in solver.around[p.y][p.x].iter() {
+                    if self.is_connected(p, np) {
+                        return true;
+                    }
+                }
+                false
+            }
+        }
+        #[derive(Clone, PartialEq, Eq)]
+        pub struct HubField {
+            f: FixedBitSet,
+        }
+        impl HubField {
+            fn new() -> Self {
+                Self {
+                    f: FixedBitSet::with_capacity(N * N),
+                }
+            }
+            fn set(&mut self, pos: Pos) {
+                self.f.set(pos.to_idx(), true);
+            }
+            fn has(&self, pos: Pos) -> bool {
+                self.f.contains(pos.to_idx())
+            }
+        }
+        #[derive(Clone, PartialEq, Eq)]
+        pub struct BridgeField {
+            h: FixedBitSet,
+            v: FixedBitSet,
+        }
+        impl BridgeField {
+            fn new() -> Self {
+                Self {
+                    h: FixedBitSet::with_capacity(N * (N - 1)),
+                    v: FixedBitSet::with_capacity((N - 1) * N),
+                }
+            }
+            fn is_bridged(&self, p0: Pos, p1: Pos) -> bool {
+                debug_assert_eq!(1, p0.dist(&p1));
+                if p0.y == p1.y {
+                    // horizontal
+                    let y = p0.y;
+                    let x0 = min(p0.x, p1.x);
+                    self.h.contains(y * (N - 1) + x0)
+                } else {
+                    // vertical
+                    let x = p0.x;
+                    let y0 = min(p0.y, p1.y);
+                    self.v.contains(y0 * N + x)
+                }
+            }
+            fn connect(&mut self, p0: Pos, p1: Pos) {
+                debug_assert_eq!(1, p0.dist(&p1));
+                if p0.y == p1.y {
+                    // horizontal
+                    let y = p0.y;
+                    let x0 = min(p0.x, p1.x);
+                    self.h.set(y * (N - 1) + x0, true);
+                } else {
+                    // vertical
+                    let x = p0.x;
+                    let y0 = min(p0.y, p1.y);
+                    self.v.set(y0 * N + x, true);
+                }
+            }
+        }
+    }
+    use state::State;
 }
