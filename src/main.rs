@@ -6463,62 +6463,46 @@ mod solver {
             }
         }
         fn gen_hub_pairs(&self) -> BTreeSet<(i64, (Pos, Pos))> {
-            const STEP: usize = 2;
-            let mut vs = vec![];
-            for hy in 0..N {
-                for hx in 0..N {
-                    let mut v = vec![BTreeSet::new(); 2];
-                    for p in self.around[hy][hx].iter() {
-                        for ci in 0..2 {
-                            if let Some(i) = self.com_field[ci][p.y][p.x] {
-                                v[ci].insert(i);
-                            }
-                        }
-                    }
-                    if v.iter().all(|v| v.is_empty()) {
-                        continue;
-                    }
-                    vs.push((Pos::new(hy, hx), v));
-                }
-            }
-            vs.sort_by_cached_key(|(_pos, vs)| Reverse(vs.len()));
-            let mut val = vec![true; vs.len()];
-            for l in 0..N {
-                if !val[l] {
-                    continue;
-                }
-                for s in (0..N).skip(l + 1) {
-                    if (0..2).all(|ci| vs[s].1[ci].iter().all(|x| vs[l].1[ci].contains(x))) {
-                        val[s] = false;
+            let mut ev = BTreeMap::new();
+            for (com, &fee) in self.com.iter().zip(self.fee.iter()) {
+                let p0 = com[0];
+                let p1 = com[1];
+                for &h0 in self.around[p0.y][p0.x].iter() {
+                    for &h1 in self.around[p1.y][p1.x].iter() {
+                        debug_assert!(h0 != h1);
+                        let (h0, h1) = if h0 < h1 { (h0, h1) } else { (h1, h0) };
+                        *ev.entry((h0, h1)).or_insert(0) += fee;
                     }
                 }
             }
-            let mut st = BTreeSet::new();
-            let vs = vs
-                .into_iter()
-                .zip(val.into_iter())
-                .filter_map(|(x, b)| if b { Some(x) } else { None })
-                .collect_vec();
-            debug!(vs.len());
-            for (vi, (pa, va)) in vs.iter().enumerate() {
-                for (pb, vb) in vs.iter().skip(vi + 1) {
-                    let i01 = va[0].intersection(&vb[1]);
-                    let i10 = va[1].intersection(&vb[0]);
-                    let ev = i01
-                        .into_iter()
-                        .chain(i10.into_iter())
-                        .collect::<BTreeSet<_>>()
-                        .into_iter()
-                        .map(|&i| self.fee[i])
-                        .sum::<i64>();
-                    debug_assert!(*pa < *pb);
-                    if ev <= 0 {
-                        continue;
+            ev.into_iter()
+                .map(|(ps, ev)| (ev, ps))
+                .collect::<BTreeSet<_>>()
+        }
+        fn calc_bridge_key(pre_pos: Pos, now_pos: Pos, nxt_pos: Pos) -> usize {
+            let dp = (
+                pre_pos.y as i64 - now_pos.y as i64,
+                pre_pos.x as i64 - now_pos.x as i64,
+            );
+            let dn = (
+                nxt_pos.y as i64 - now_pos.y as i64,
+                nxt_pos.x as i64 - now_pos.x as i64,
+            );
+            let dsum = (dp.0 + dn.0, dp.1 + dn.1);
+            match dsum {
+                (1, 1) => 6,
+                (-1, 1) => 5,
+                (1, -1) => 3,
+                (-1, -1) => 4,
+                (0, 0) => {
+                    if dp.0 != 0 {
+                        2
+                    } else {
+                        1
                     }
-                    st.insert((ev, (*pa, *pb)));
                 }
+                _ => unreachable!(),
             }
-            st
         }
         fn connect(
             &self,
@@ -6610,29 +6594,7 @@ mod solver {
                 let t = if nroad == Road::Bridge {
                     let pi = i - 1;
                     let ni = i + 1;
-                    let dp = (
-                        construct[pi].0.y as i64 - construct[i].0.y as i64,
-                        construct[pi].0.x as i64 - construct[i].0.x as i64,
-                    );
-                    let dn = (
-                        construct[ni].0.y as i64 - construct[i].0.y as i64,
-                        construct[ni].0.x as i64 - construct[i].0.x as i64,
-                    );
-                    let dsum = (dp.0 + dn.0, dp.1 + dn.1);
-                    match dsum {
-                        (1, 1) => 6,
-                        (-1, 1) => 5,
-                        (1, -1) => 3,
-                        (-1, -1) => 4,
-                        (0, 0) => {
-                            if dp.0 != 0 {
-                                2
-                            } else {
-                                1
-                            }
-                        }
-                        _ => unreachable!(),
-                    }
+                    Self::calc_bridge_key(construct[pi].0, construct[i].0, construct[ni].0)
                 } else {
                     0
                 };
@@ -6646,6 +6608,7 @@ mod solver {
         pub fn solve(self) {
             let mut score = self.ini_money;
             let mut hub_pairs = self.gen_hub_pairs();
+            eprintln!("ini_pair:{}", hub_pairs.len());
             let mut hub_pairs_memo = hub_pairs
                 .iter()
                 .map(|&(income_delta, ps)| (ps, income_delta))
@@ -6662,6 +6625,7 @@ mod solver {
             'main: while now_turn < T {
                 let mut pay_max = 0;
                 let mut action = None;
+                let mut dels = vec![];
                 for &(income_delta, (p0, p1)) in hub_pairs.iter().rev() {
                     if self.t0.elapsed().as_millis() > 1800 {
                         break 'main;
@@ -6678,10 +6642,55 @@ mod solver {
                                 })
                             })
                     }) {
+                        dels.push((income_delta, (p0, p1)));
                         continue;
                     }
                     lc += 1;
-                    let Some((cost, mut build, construct)) = self.connect(p0, p1, &road, &mut uf) else {
+                    let con = if now_turn > 0 {
+                        self.connect(p0, p1, &road, &mut uf)
+                    } else {
+                        let cost = (p0.dist(&p1) - 1) * COST_BRIDGE + 2 * COST_HUB;
+                        if cost > now_money {
+                            continue;
+                        }
+                        let mut construct = vec![(p0, Road::Hub)];
+                        let mut v = p0;
+                        while v.y < p1.y {
+                            v.y += 1;
+                            construct.push((v, Road::Bridge));
+                        }
+                        while v.y > p1.y {
+                            v.y -= 1;
+                            construct.push((v, Road::Bridge));
+                        }
+                        while v.x < p1.x {
+                            v.x += 1;
+                            construct.push((v, Road::Bridge));
+                        }
+                        while v.x > p1.x {
+                            v.x -= 1;
+                            construct.push((v, Road::Bridge));
+                        }
+                        construct.last_mut().unwrap().1 = Road::Hub;
+                        let build = (0..construct.len())
+                            .map(|i| {
+                                if i == 0 || i == construct.len() - 1 {
+                                    (construct[i].0, 0)
+                                } else {
+                                    (
+                                        construct[i].0,
+                                        Self::calc_bridge_key(
+                                            construct[i - 1].0,
+                                            construct[i].0,
+                                            construct[i + 1].0,
+                                        ),
+                                    )
+                                }
+                            })
+                            .collect_vec();
+                        Some((cost, build, construct))
+                    };
+                    let Some((cost, mut build, construct)) = con else {
                         continue;
                     };
                     if now_turn + build.len() > T {
@@ -6788,6 +6797,10 @@ mod solver {
                         })
                     })
                 });
+                for (del_delta, dps) in dels {
+                    hub_pairs.remove(&(del_delta, dps));
+                    hub_pairs_memo.remove(&dps);
+                }
             }
             ans.answer();
             eprintln!("{score}");
