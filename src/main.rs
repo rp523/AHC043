@@ -6462,7 +6462,7 @@ mod solver {
                 hub_reach_com,
             }
         }
-        fn gen_hub_pairs(&self) -> DeletableBinaryHeap<(i64, (Pos, Pos))> {
+        fn gen_hub_pairs(&self) -> BTreeSet<(i64, (Pos, Pos))> {
             const STEP: usize = 2;
             let mut vs = vec![];
             for hy in 0..N {
@@ -6493,7 +6493,7 @@ mod solver {
                     }
                 }
             }
-            let mut que = DeletableBinaryHeap::new();
+            let mut st = BTreeSet::new();
             let vs = vs
                 .into_iter()
                 .zip(val.into_iter())
@@ -6511,10 +6511,14 @@ mod solver {
                         .into_iter()
                         .map(|&i| self.fee[i])
                         .sum::<i64>();
-                    que.push((ev, (*pa, *pb)));
+                    debug_assert!(*pa < *pb);
+                    if ev <= 0 {
+                        continue;
+                    }
+                    st.insert((ev, (*pa, *pb)));
                 }
             }
-            que
+            st
         }
         fn connect(
             &self,
@@ -6633,8 +6637,7 @@ mod solver {
         pub fn solve(self) {
             let mut score = self.ini_money;
             let mut hub_pairs = self.gen_hub_pairs();
-            let mut plan = hub_pairs
-                .que
+            let mut hub_pairs_memo = hub_pairs
                 .iter()
                 .map(|&(income_delta, ps)| (ps, income_delta))
                 .collect::<BTreeMap<(Pos, Pos), i64>>();
@@ -6647,56 +6650,66 @@ mod solver {
             let mut al_con = vec![false; self.com.len()];
             let mut lc = 0;
             let mut covered = vec![vec![false; self.com.len()]; 2];
-            while let Some((income_delta, (p0, p1))) = hub_pairs.pop() {
-                if self.t0.elapsed().as_millis() > 1800 {
-                    break;
-                }
-                assert_eq!(Some(income_delta), plan.remove(&(p0, p1)));
-                if vec![p0, p1].iter().any(|p| {
-                    road[p.y][p.x] != Road::Hub
-                        && self.around[p.y][p.x].iter().all(|a| {
-                            (0..2).all(|ci| {
-                                if let Some(i) = self.com_field[ci][a.y][a.x] {
-                                    covered[ci][i]
-                                } else {
-                                    true
-                                }
+            'main: while now_turn < T {
+                let mut pay_max = 0;
+                let mut action = None;
+                for &(income_delta, (p0, p1)) in hub_pairs.iter().rev() {
+                    if self.t0.elapsed().as_millis() > 1800 {
+                        break 'main;
+                    }
+                    if vec![p0, p1].iter().any(|p| {
+                        road[p.y][p.x] != Road::Hub
+                            && self.around[p.y][p.x].iter().all(|a| {
+                                (0..2).all(|ci| {
+                                    if let Some(i) = self.com_field[ci][a.y][a.x] {
+                                        covered[ci][i]
+                                    } else {
+                                        true
+                                    }
+                                })
                             })
-                        })
-                }) {
-                    continue;
+                    }) {
+                        continue;
+                    }
+                    lc += 1;
+                    let Some((cost, mut build, construct)) = self.connect(p0, p1, &road, &mut uf) else {
+                        continue;
+                    };
+                    if now_turn + build.len() > T {
+                        continue;
+                    }
+                    build.sort_by_cached_key(|(_p, d)| Reverse(*d));
+                    let dt2 = build.iter().filter(|(_, dir)| dir == &0).count() as i64;
+                    let dt1 = build.len() as i64 - dt2;
+                    let mut fall = 0;
+                    fall.chmax(COST_BRIDGE);
+                    fall.chmax(COST_BRIDGE + (COST_BRIDGE - income) * (dt1 - 1));
+                    fall.chmax((COST_BRIDGE - income) * dt1 + COST_HUB);
+                    fall.chmax(
+                        (COST_BRIDGE - income) * dt1 + COST_HUB + (COST_HUB - income) * (dt2 - 1),
+                    );
+                    let build_start = if now_money - fall >= 0 {
+                        now_turn
+                    } else if income == 0 {
+                        continue;
+                    } else {
+                        // now_money + income * d >= cost
+                        let elapse = (fall - now_money + income - 1) / income;
+                        now_turn + elapse as usize
+                    };
+                    let gain_start = build_start + build.len() - 1;
+                    let pay = (T - gain_start) as i64 * income_delta - cost;
+                    if pay_max.chmax(pay) {
+                        action =
+                            Some(((income_delta, p0, p1), cost, build, build_start, construct));
+                        break;
+                    }
                 }
-                lc += 1;
-                let Some((cost, mut build, construct)) = self.connect(p0, p1, &road, &mut uf) else {
-                    continue;
+                let Some(((income_delta, p0, p1), cost, build, build_start, construct)) = action
+                else {
+                    eprintln!("{lc} no cand");
+                    break;
                 };
-                if now_turn + build.len() > T {
-                    continue;
-                }
-                build.sort_by_cached_key(|(_p, d)| Reverse(*d));
-                let dt2 = build.iter().filter(|(_, dir)| dir == &0).count() as i64;
-                let dt1 = build.len() as i64 - dt2;
-                let mut fall = 0;
-                fall.chmax(COST_BRIDGE);
-                fall.chmax(COST_BRIDGE + (COST_BRIDGE - income) * (dt1 - 1));
-                fall.chmax((COST_BRIDGE - income) * dt1 + COST_HUB);
-                fall.chmax(
-                    (COST_BRIDGE - income) * dt1 + COST_HUB + (COST_HUB - income) * (dt2 - 1),
-                );
-                let build_start = if now_money - fall >= 0 {
-                    now_turn
-                } else if income == 0 {
-                    continue;
-                } else {
-                    // now_money + income * d >= cost
-                    let elapse = (fall - now_money + income - 1) / income;
-                    now_turn + elapse as usize
-                };
-                let gain_start = build_start + build.len() - 1;
-                let pay = (T - gain_start) as i64 * income_delta - cost;
-                if pay <= 0 {
-                    continue;
-                }
                 eprintln!(
                     "{lc} t:{now_turn} money:{now_money} income:{income}+{income_delta}, cost:{cost} build_start:{build_start} {:?} {:?}",
                     p0, p1
@@ -6708,6 +6721,8 @@ mod solver {
                     now_money += income;
                 }
                 // execute
+                assert!(hub_pairs.remove(&(income_delta, (p0, p1))));
+                assert_eq!(Some(income_delta), hub_pairs_memo.remove(&(p0, p1)));
                 debug_assert!(now_turn < T);
                 for ti in 1..construct.len() {
                     let con0 = construct[ti - 1].0;
@@ -6740,12 +6755,11 @@ mod solver {
                                 } else {
                                     (sta1, sta0)
                                 };
-                                if let Some(plan) = plan.get_mut(&(sta0, sta1)) {
+                                if let Some(plan) = hub_pairs_memo.get_mut(&(sta0, sta1)) {
                                     let org = *plan;
                                     *plan -= self.fee[i];
-                                    if (sta0, sta1) != (p0, p1) {
-                                        hub_pairs.remove(&(org, (sta0, sta1)));
-                                        hub_pairs.push((*plan, (sta0, sta1)));
+                                    if hub_pairs.remove(&(org, (sta0, sta1))) {
+                                        hub_pairs.insert((*plan, (sta0, sta1)));
                                     }
                                 }
                             }
@@ -6755,7 +6769,7 @@ mod solver {
                 ans.add(build);
                 now_money += income_delta;
                 income += income_delta;
-                score += pay;
+                score += pay_max;
                 vec![p0, p1].iter().for_each(|p| {
                     self.around[p.y][p.x].iter().for_each(|a| {
                         (0..2).for_each(|ci| {
