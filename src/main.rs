@@ -6547,7 +6547,15 @@ mod solver {
                 }
                 for &p1 in self.near4[p0.y][p0.x].iter() {
                     let (delta, nxt_road) = if uf.same(p0.to_idx(), p1.to_idx()) {
-                        (0, road[p1.y][p1.x])
+                        if p1 == t {
+                            if road[p1.y][p1.x] == Road::Hub {
+                                (0, Road::Hub)
+                            } else {
+                                (COST_HUB, Road::Hub)
+                            }
+                        } else {
+                            (0, road[p1.y][p1.x])
+                        }
                     } else {
                         if uf.group_size(p0.to_idx()) > 1 && road[p0.y][p0.x] != Road::Hub {
                             continue;
@@ -6586,6 +6594,7 @@ mod solver {
                 v = pv;
             }
             construct.push((s, Road::Hub));
+            construct.reverse();
             let mut build = vec![];
             let mut cost = 0;
             for i in 0..construct.len() {
