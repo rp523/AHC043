@@ -1,12 +1,21 @@
 from subprocess import getoutput
-import time
+import time, os, shutil
+from pathlib import Path
 DEBUG = False
 
+bin_path = Path("scan.exe")
+if bin_path.exists():
+    os.remove(bin_path)
 print("DEBUG: ", DEBUG)
 cmd = "cargo fmt && cargo build"
 if not DEBUG:
     cmd += " -r"
 ret = getoutput(cmd)
+if not DEBUG:
+    shutil.copy("target/release/atcoder.exe", bin_path)
+else:
+    shutil.copy("target/debug/atcoder.exe", bin_path)
+assert(bin_path.exists())
 dt_max = 0
 dt_max_i = 0
 score_min = -1
@@ -18,7 +27,7 @@ norm = 0
 with open("score1.csv", "w") as f:
     for i in range(100):
         print(i, end = ":")
-        cmd = "cargo run"
+        cmd = str(bin_path)
         if not DEBUG:
             cmd += " -r"
         cmd += " < tools/in/{0:04d}.txt > tools/out/{0:04d}.txt".format(i, i)

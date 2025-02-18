@@ -6624,10 +6624,11 @@ mod solver {
             let mut covered = vec![vec![false; self.com.len()]; 2];
             'main: while now_turn < T {
                 let mut pay_max = 0;
+                let mut pay_max_upd = 0;
                 let mut action = None;
                 let mut dels = vec![];
                 for &(income_delta, (p0, p1)) in hub_pairs.iter().rev() {
-                    if self.t0.elapsed().as_millis() > 1800 {
+                    if self.t0.elapsed().as_millis() > 2800 {
                         break 'main;
                     }
                     if vec![p0, p1].iter().any(|p| {
@@ -6717,9 +6718,15 @@ mod solver {
                     };
                     let gain_start = build_start + build.len() - 1;
                     let pay = (T - gain_start) as i64 * income_delta - cost;
+                    if pay <= 0 {
+                        continue;
+                    }
                     if pay_max.chmax(pay) {
                         action =
                             Some(((income_delta, p0, p1), cost, build, build_start, construct));
+                    }
+                    pay_max_upd += 1;
+                    if pay_max_upd >= 128 {
                         break;
                     }
                 }
