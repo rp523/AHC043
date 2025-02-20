@@ -4,3 +4,4 @@ Cargo.lock
 *.txt
 *.csv
 *.exe
+*.xlsx

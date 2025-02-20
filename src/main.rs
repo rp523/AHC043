@@ -6321,7 +6321,7 @@ mod solver {
     const T: usize = 800;
     const COST_HUB: i64 = 5000;
     const COST_BRIDGE: i64 = 100;
-    const BEAM_WIDTH: usize = 256;
+    const BEAM_WIDTH: usize = 10;
     const PROPOSE_NUM: usize = 10;
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
     pub struct Pos {
@@ -6329,12 +6329,15 @@ mod solver {
         x: usize,
     }
     impl Pos {
+        #[inline(always)]
         fn new(y: usize, x: usize) -> Self {
             Self { y, x }
         }
+        #[inline(always)]
         fn to_idx(&self) -> usize {
             self.y * N + self.x
         }
+        #[inline(always)]
         fn dist(&self, other: &Self) -> i64 {
             let dy = self.y as i64 - other.y as i64;
             let dx = self.x as i64 - other.x as i64;
@@ -6435,14 +6438,19 @@ mod solver {
                 eprintln!("{ti}");
                 let mut nxt = BinaryHeap::new();
                 for (pi, (pre_state, _)) in dp.last().unwrap().iter().enumerate() {
-                    for nstate in pre_state.propose_new_states(&self) {
+                    let (news, pre) = pre_state.propose_new(&self, ti == 1);
+                    for (nxt_finance, nxt_hub) in news {
                         if nxt.len() < BEAM_WIDTH {
-                            nxt.push((Reverse(nstate), pi));
+                            let mut nxt_state = pre_state.clone();
+                            nxt_state.mutate(nxt_finance, &pre, nxt_hub, self);
+                            nxt.push((Reverse(nxt_state), pi));
                         } else {
-                            let (Reverse(pstate), _) = nxt.peek().unwrap();
-                            if &nstate > pstate {
+                            let (Reverse(al_state), _) = nxt.peek().unwrap();
+                            if nxt_finance > al_state.finance {
                                 nxt.pop();
-                                nxt.push((Reverse(nstate), pi));
+                                let mut nxt_state = pre_state.clone();
+                                nxt_state.mutate(nxt_finance, &pre, nxt_hub, self);
+                                nxt.push((Reverse(nxt_state), pi));
                             } else {
                                 // do nothing
                             }
@@ -6461,6 +6469,9 @@ mod solver {
                     if best.chmax(state.finance) {
                         best_at = (ti, i);
                     }
+                }
+                if self.t0.elapsed().as_millis() > 2500 {
+                    break;
                 }
             }
             let (mut ti, mut i) = best_at;
@@ -6649,7 +6660,12 @@ mod solver {
                 }
                 add_ans
             }
-            pub fn propose_new_states(&self, solver: &Solver) -> Vec<State> {
+            #[inline(always)]
+            pub fn propose_new(
+                &self,
+                solver: &Solver,
+                ini: bool,
+            ) -> (Vec<(Finance, Pos)>, [[Pos; N]; N]) {
                 let mut que = VecDeque::new();
                 const INF: i64 = 1i64 << 60;
                 let mut dist = [[INF; N]; N];
@@ -6712,6 +6728,9 @@ mod solver {
                                     .sum::<i64>()
                             })
                             .sum::<i64>();
+                        if ini && income_delta == 0 {
+                            continue;
+                        }
                         let Some(finance) = self.calc_finance(add_bridge_num, income_delta) else {
                             continue;
                         };
@@ -6731,15 +6750,16 @@ mod solver {
                         }
                     }
                 }
-                to.into_iter()
-                    .map(|(Reverse(f), p)| {
-                        let mut nstate = self.clone();
-                        nstate.mutate(f, &pre, p, &solver);
-                        nstate
-                    })
-                    .collect_vec()
+                (
+                    to.into_iter()
+                        .rev()
+                        .map(|(Reverse(f), p)| (f, p))
+                        .collect_vec(),
+                    pre,
+                )
             }
-            fn mutate(
+            #[inline(always)]
+            pub fn mutate(
                 &mut self,
                 nxt_finance: Finance,
                 pre: &[[Pos; N]; N],
@@ -6794,6 +6814,7 @@ mod solver {
                 self.hub_field.set(nxt_hub);
                 self.finance = nxt_finance;
             }
+            #[inline(always)]
             fn calc_finance(&self, add_bridge_num: i64, income_delta: i64) -> Option<Finance> {
                 let mut fall = 0;
                 if add_bridge_num > 0 {
@@ -6833,6 +6854,7 @@ mod solver {
                     score: nxt_score,
                 })
             }
+            #[inline(always)]
             fn is_connected(&self, p0: Pos, p1: Pos) -> bool {
                 debug_assert_eq!(1, p0.dist(&p1));
                 if self.hub_field.has(p0) && self.hub_field.has(p1) {
@@ -6841,6 +6863,7 @@ mod solver {
                     self.bridge_field.is_bridged(p0, p1)
                 }
             }
+            #[inline(always)]
             fn is_bridge(&self, p: Pos, solver: &Solver) -> bool {
                 if self.hub_field.has(p) {
                     return false;
@@ -6858,14 +6881,17 @@ mod solver {
             f: FixedBitSet,
         }
         impl HubField {
+            #[inline(always)]
             fn new() -> Self {
                 Self {
                     f: FixedBitSet::with_capacity(N * N),
                 }
             }
+            #[inline(always)]
             fn set(&mut self, pos: Pos) {
                 self.f.set(pos.to_idx(), true);
             }
+            #[inline(always)]
             fn has(&self, pos: Pos) -> bool {
                 self.f.contains(pos.to_idx())
             }
@@ -6876,12 +6902,14 @@ mod solver {
             v: FixedBitSet,
         }
         impl BridgeField {
+            #[inline(always)]
             fn new() -> Self {
                 Self {
                     h: FixedBitSet::with_capacity(N * (N - 1)),
                     v: FixedBitSet::with_capacity((N - 1) * N),
                 }
             }
+            #[inline(always)]
             fn is_bridged(&self, p0: Pos, p1: Pos) -> bool {
                 debug_assert_eq!(1, p0.dist(&p1));
                 if p0.y == p1.y {
@@ -6896,6 +6924,7 @@ mod solver {
                     self.v.contains(y0 * N + x)
                 }
             }
+            #[inline(always)]
             fn connect(&mut self, p0: Pos, p1: Pos) {
                 debug_assert_eq!(1, p0.dist(&p1));
                 if p0.y == p1.y {
