@@ -6438,8 +6438,8 @@ mod solver {
                 if self.ini_money < cost {
                     continue;
                 }
-                let gain_start = dist + 1;
-                let score = (T as i64 - gain_start) * income_delta - cost;
+                let gain_start = dist;
+                let score = self.ini_money + (T as i64 - gain_start) * income_delta - cost;
                 let turn = gain_start as usize + 1;
                 let money = self.ini_money - cost + income_delta;
                 let finance = Finance {
@@ -6833,10 +6833,10 @@ mod solver {
                     if v == pv {
                         break;
                     }
-                    self.bridge_field.connect(pv, v);
-                    if !self.hub_field.has(pv) && !self.is_bridge(pv, solver) {
+                    if !self.hub_field.has(pv) && !self.is_connected(v, pv) {
                         add_bridge_num += 1;
                     }
+                    self.bridge_field.connect(pv, v);
                     v = pv;
                 }
                 let mut income_delta = 0;
@@ -6852,23 +6852,10 @@ mod solver {
                         }
                     }
                 }
-                if false && Some(nxt_finance) != self.calc_finance(add_bridge_num, income_delta) {
-                    for y in 0..N {
-                        for x in 0..N {
-                            if self.hub_field.has(Pos::new(y, x)) {
-                                debug!("hub", y, x);
-                            }
-                        }
-                    }
-                    debug!(self.finance);
-                    debug!(nxt_finance);
-                    debug!(self.calc_finance(add_bridge_num, income_delta).unwrap());
-                    debug!(nxt_hub, add_bridge_num, income_delta);
-                    debug_assert_eq!(
-                        Some(nxt_finance),
-                        self.calc_finance(add_bridge_num, income_delta)
-                    );
-                }
+                debug_assert_eq!(
+                    Some(nxt_finance),
+                    self.calc_finance(add_bridge_num, income_delta)
+                );
                 self.hub_field.set(nxt_hub);
                 self.finance = nxt_finance;
             }
