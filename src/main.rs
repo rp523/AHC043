@@ -6329,7 +6329,7 @@ mod solver {
     const T: usize = 800;
     const COST_HUB: i64 = 5000;
     const COST_BRIDGE: i64 = 100;
-    const BEAM_WIDTH: usize = 20;
+    const BEAM_WIDTH: usize = 32;
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
     pub struct Pos {
         y: usize,
@@ -6500,7 +6500,7 @@ mod solver {
                 }
                 dp.push(nxt.to_vec(&dp[ti - 1], &pre_pos, self));
                 for (i, (state, _)) in dp.last().unwrap().iter().enumerate() {
-                    if best.chmax(state.finance) {
+                    if best.chmax(state.finance.score) {
                         best_at = (ti, i);
                     }
                 }
@@ -6658,10 +6658,11 @@ mod solver {
             #[inline(always)]
             fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
                 #[inline(always)]
-                fn to_ord(finance: &Finance) -> (i64, Rational, i64) {
+                fn to_ord(finance: &Finance) -> (OrderedFloat<f64>, i64, i64) {
                     (
+                        OrderedFloat::<f64>(finance.score as f64)
+                            / OrderedFloat::<f64>((finance.turn as f64).sqrt()),
                         finance.score,
-                        Rational::new(finance.income, finance.turn as i64),
                         finance.money,
                     )
                 }
