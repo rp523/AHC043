@@ -6681,7 +6681,7 @@ mod solver {
         pub struct State {
             hub_field: HubField,
             bridge_field: BridgeField,
-            commute: Vec<FixedBitSet>,
+            commute: Commute,
             pub finance: Finance,
             pub zobrist: u64,
         }
@@ -6704,7 +6704,7 @@ mod solver {
                 for &hub in hubs.iter() {
                     hub_field.set(hub);
                 }
-                let mut commute = vec![FixedBitSet::with_capacity(solver.com.len()); 2];
+                let mut commute = Commute::new(solver.com.len());
                 let mut zobrist = 0;
                 for hub in hubs.iter() {
                     for &p in solver.around[hub.y][hub.x].iter() {
@@ -6712,8 +6712,8 @@ mod solver {
                             let Some(i) = solver.com_field[ci][p.y][p.x] else {
                                 continue;
                             };
-                            debug_assert!(!commute[ci].contains(i));
-                            commute[ci].set(i, true);
+                            debug_assert!(!commute.contains(ci, i));
+                            commute.set(ci, i);
                             zobrist ^= solver.hash[ci][i];
                         }
                     }
@@ -6764,7 +6764,7 @@ mod solver {
                         p.y = y;
                         for x in 0..N {
                             p.x = x;
-                            if self.hub_field.has(p) && !pstate.hub_field.has(p) {
+                            if self.hub_field.contains(p) && !pstate.hub_field.contains(p) {
                                 add_ans.push(Some((p, 0)));
                             }
                         }
@@ -6787,7 +6787,7 @@ mod solver {
                         p.y = y;
                         for x in 0..N {
                             p.x = x;
-                            if self.hub_field.has(p) {
+                            if self.hub_field.contains(p) {
                                 add_ans.push(Some((p, 0)));
                             } else if self.is_bridge(p, solver) {
                                 let dir = self.bridge_dir(p, solver);
@@ -6840,7 +6840,7 @@ mod solver {
                     for x in 0..N {
                         let ini = Pos::new(y, x);
                         // start from hub.
-                        if !self.hub_field.has(ini) {
+                        if !self.hub_field.contains(ini) {
                             continue;
                         }
                         que.push_back(ini);
@@ -6874,7 +6874,7 @@ mod solver {
                 for y in 0..N {
                     for x in 0..N {
                         let p = Pos::new(y, x);
-                        if self.hub_field.has(p) || dist[y][x] >= INF {
+                        if self.hub_field.contains(p) || dist[y][x] >= INF {
                             continue;
                         }
                         let add_bridge_num = max(dist[p.y][p.x] - 1, 0);
@@ -6885,9 +6885,9 @@ mod solver {
                                 let Some(i) = solver.com_field[ci][np.y][np.x] else {
                                     continue;
                                 };
-                                if !self.commute[ci].contains(i) {
+                                if !self.commute.contains(ci, i) {
                                     zobrist ^= solver.hash[ci][i];
-                                    if self.commute[ci ^ 1].contains(i) {
+                                    if self.commute.contains(ci ^ 1, i) {
                                         income_delta += solver.fee[i];
                                     }
                                 }
@@ -6910,7 +6910,7 @@ mod solver {
                 solver: &Solver,
             ) {
                 debug_assert_ne!(self.finance, nxt_finance);
-                debug_assert!(!self.hub_field.has(nxt_hub));
+                debug_assert!(!self.hub_field.contains(nxt_hub));
                 let mut v = nxt_hub;
                 let mut add_bridge_num = 0;
                 loop {
@@ -6918,7 +6918,7 @@ mod solver {
                     if v == pv {
                         break;
                     }
-                    if !self.hub_field.has(pv) && !self.is_connected(v, pv) {
+                    if !self.hub_field.contains(pv) && !self.is_connected(v, pv) {
                         add_bridge_num += 1;
                     }
                     self.bridge_field.connect(pv, v);
@@ -6928,10 +6928,10 @@ mod solver {
                 for &p in solver.around[nxt_hub.y][nxt_hub.x].iter() {
                     for (ci, com_field) in solver.com_field.iter().enumerate() {
                         if let Some(i) = com_field[p.y][p.x] {
-                            if !self.commute[ci].contains(i) {
-                                self.commute[ci].set(i, true);
+                            if !self.commute.contains(ci, i) {
+                                self.commute.set(ci, i);
                                 self.zobrist ^= solver.hash[ci][i];
-                                if self.commute[ci ^ 1].contains(i) {
+                                if self.commute.contains(ci ^ 1, i) {
                                     income_delta += solver.fee[i];
                                 }
                             }
@@ -6988,7 +6988,7 @@ mod solver {
             #[inline(always)]
             fn is_connected(&self, p0: Pos, p1: Pos) -> bool {
                 debug_assert_eq!(1, p0.dist(&p1));
-                if self.hub_field.has(p0) && self.hub_field.has(p1) {
+                if self.hub_field.contains(p0) && self.hub_field.contains(p1) {
                     true
                 } else {
                     self.bridge_field.is_bridged(p0, p1)
@@ -6996,7 +6996,7 @@ mod solver {
             }
             #[inline(always)]
             fn is_bridge(&self, p: Pos, solver: &Solver) -> bool {
-                if self.hub_field.has(p) {
+                if self.hub_field.contains(p) {
                     return false;
                 }
                 for &np in solver.near4[p.y][p.x].iter() {
@@ -7023,7 +7023,7 @@ mod solver {
                 self.f.set(pos.to_idx(), true);
             }
             #[inline(always)]
-            fn has(&self, pos: Pos) -> bool {
+            fn contains(&self, pos: Pos) -> bool {
                 self.f.contains(pos.to_idx())
             }
         }
@@ -7071,6 +7071,30 @@ mod solver {
                 }
             }
         }
+        mod commute {
+            use super::*;
+            #[derive(Clone, PartialEq, Eq)]
+            pub struct Commute {
+                com: Vec<FixedBitSet>,
+            }
+            impl Commute {
+                #[inline(always)]
+                pub fn new(m: usize) -> Self {
+                    Self {
+                        com: vec![FixedBitSet::with_capacity(m); 2],
+                    }
+                }
+                #[inline(always)]
+                pub fn contains(&self, ci: usize, i: usize) -> bool {
+                    self.com[ci].contains(i)
+                }
+                #[inline(always)]
+                pub fn set(&mut self, ci: usize, i: usize) {
+                    self.com[ci].set(i, true);
+                }
+            }
+        }
+        use commute::Commute;
     }
     use state::{Finance, State};
 }
