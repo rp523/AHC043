@@ -6471,7 +6471,7 @@ mod solver {
                 eprintln!("{ti}");
                 let mut nxt = BinaryHeap::new();
                 for (pi, (pre_state, _)) in dp.last().unwrap().iter().enumerate() {
-                    let (news, pre) = pre_state.propose_new(&self, ti == 1);
+                    let (news, pre) = pre_state.propose_new(&self);
                     for (nxt_finance, nxt_hub) in news {
                         if nxt.len() < BEAM_WIDTH {
                             let mut nxt_state = pre_state.clone();
@@ -6719,11 +6719,7 @@ mod solver {
                 }
             }
             #[inline(always)]
-            pub fn propose_new(
-                &self,
-                solver: &Solver,
-                ini: bool,
-            ) -> (Vec<(Finance, Pos)>, [[Pos; N]; N]) {
+            pub fn propose_new(&self, solver: &Solver) -> (Vec<(Finance, Pos)>, [[Pos; N]; N]) {
                 let mut que = VecDeque::new();
                 const INF: i64 = 1i64 << 60;
                 let mut dist = [[INF; N]; N];
@@ -6786,13 +6782,8 @@ mod solver {
                                     .sum::<i64>()
                             })
                             .sum::<i64>();
-                        if ini && income_delta == 0 {
-                            continue;
-                        }
+
                         let Some(finance) = self.calc_finance(add_bridge_num, income_delta) else {
-                            continue;
-                        };
-                        if finance <= self.finance {
                             continue;
                         };
                         if to.len() < PROPOSE_NUM {
