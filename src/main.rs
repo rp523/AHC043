@@ -6317,6 +6317,7 @@ fn main() {
 mod solver {
     use super::*;
 
+    const INF: i64 = 1i64 << 60;
     const N: usize = 50;
     const T: usize = 800;
     const COST_HUB: i64 = 5000;
@@ -6467,37 +6468,26 @@ mod solver {
             let mut dp = vec![ini.into_iter().map(|s| (s, 0)).collect_vec()];
             let mut best = None;
             let mut best_at = (0, 0);
+            let mut pre_pos = Vec::with_capacity(dp[0].len());
             for ti in 1.. {
                 eprintln!("{ti}");
-                let mut nxt = BinaryHeap::new();
-                for (pi, (pre_state, _)) in dp.last().unwrap().iter().enumerate() {
-                    let (news, pre) = pre_state.propose_new(&self);
-                    for (nxt_finance, nxt_hub) in news {
-                        if nxt.len() < BEAM_WIDTH {
-                            let mut nxt_state = pre_state.clone();
-                            nxt_state.mutate(nxt_finance, &pre, nxt_hub, self);
-                            nxt.push((Reverse(nxt_state), pi));
-                        } else {
-                            let (Reverse(al_state), _) = nxt.peek().unwrap();
-                            if nxt_finance > al_state.finance {
-                                nxt.pop();
-                                let mut nxt_state = pre_state.clone();
-                                nxt_state.mutate(nxt_finance, &pre, nxt_hub, self);
-                                nxt.push((Reverse(nxt_state), pi));
-                            } else {
-                                // do nothing
-                            }
-                        }
-                    }
+                let mut nxt = StateQue::new();
+                for _ in pre_pos.len()..dp.last().unwrap().len() {
+                    pre_pos.push([[Pos::new(0, 0); N]; N]);
+                }
+                for (pi, ((pre_state, _), pre_pos)) in dp
+                    .last()
+                    .unwrap()
+                    .iter()
+                    .zip(pre_pos.iter_mut())
+                    .enumerate()
+                {
+                    pre_state.propose_new(pre_pos, pi, &mut nxt, &self);
                 }
                 if nxt.is_empty() {
                     break;
                 }
-                dp.push(
-                    nxt.into_iter()
-                        .map(|(Reverse(s), pi)| (s, pi))
-                        .collect_vec(),
-                );
+                dp.push(nxt.to_vec(&dp[ti - 1], &pre_pos, self));
                 for (i, (state, _)) in dp.last().unwrap().iter().enumerate() {
                     if best.chmax(state.finance) {
                         best_at = (ti, i);
@@ -6550,6 +6540,48 @@ mod solver {
             for _ in 0..rem {
                 println!("-1");
             }
+        }
+    }
+
+    pub struct StateQue {
+        que: BinaryHeap<(Reverse<Finance>, Pos, usize)>,
+        hash_scores: HashMap<u64, Finance>,
+    }
+    impl StateQue {
+        pub fn new() -> Self {
+            Self {
+                que: BinaryHeap::new(),
+                hash_scores: HashMap::new(),
+            }
+        }
+        pub fn try_push(&mut self, finance: Finance, pos: Pos, pi: usize) {
+            if self.que.len() < BEAM_WIDTH {
+                self.que.push((Reverse(finance), pos, pi));
+            } else {
+                let (Reverse(al_finance), _, _) = self.que.peek().unwrap();
+                if al_finance < &finance {
+                    self.que.pop();
+                    self.que.push((Reverse(finance), pos, pi));
+                }
+            }
+        }
+        pub fn to_vec(
+            self,
+            pre_states: &[(State, usize)],
+            pre_pos: &[[[Pos; N]; N]],
+            solver: &Solver,
+        ) -> Vec<(State, usize)> {
+            self.que
+                .into_iter()
+                .map(|(Reverse(nxt_finance), nxt_hub, pi)| {
+                    let mut nxt_state = pre_states[pi].0.clone();
+                    nxt_state.mutate(nxt_finance, &pre_pos[pi], nxt_hub, solver);
+                    (nxt_state, pi)
+                })
+                .collect_vec()
+        }
+        pub fn is_empty(&self) -> bool {
+            self.que.is_empty()
         }
     }
 
@@ -6719,11 +6751,15 @@ mod solver {
                 }
             }
             #[inline(always)]
-            pub fn propose_new(&self, solver: &Solver) -> (Vec<(Finance, Pos)>, [[Pos; N]; N]) {
+            pub fn propose_new(
+                &self,
+                pre_pos: &mut [[Pos; N]; N],
+                pi: usize,
+                nxt: &mut StateQue,
+                solver: &Solver,
+            ) {
                 let mut que = VecDeque::new();
-                const INF: i64 = 1i64 << 60;
                 let mut dist = [[INF; N]; N];
-                let mut pre = [[Pos::new(0, 0); N]; N];
                 for y in 0..N {
                     for x in 0..N {
                         let ini = Pos::new(y, x);
@@ -6733,7 +6769,7 @@ mod solver {
                         }
                         que.push_back(ini);
                         dist[ini.y][ini.x] = 0;
-                        pre[ini.y][ini.x] = ini;
+                        pre_pos[ini.y][ini.x] = ini;
                     }
                 }
                 while let Some(p0) = que.pop_front() {
@@ -6753,15 +6789,14 @@ mod solver {
                             } else {
                                 que.push_back(p1);
                             }
-                            pre[p1.y][p1.x] = p0;
+                            pre_pos[p1.y][p1.x] = p0;
                         }
                     }
                 }
-                let mut to = BinaryHeap::new();
                 for y in 0..N {
                     for x in 0..N {
                         let p = Pos::new(y, x);
-                        if self.hub_field.has(p) || dist[y][x] == INF {
+                        if self.hub_field.has(p) || dist[y][x] >= INF {
                             continue;
                         }
                         let add_bridge_num = max(dist[p.y][p.x] - 1, 0);
@@ -6786,32 +6821,15 @@ mod solver {
                         let Some(finance) = self.calc_finance(add_bridge_num, income_delta) else {
                             continue;
                         };
-                        if to.len() < PROPOSE_NUM {
-                            to.push((Reverse(finance), p));
-                        } else {
-                            let &(Reverse(finance0), _) = to.peek().unwrap();
-                            if finance0 < finance {
-                                to.pop();
-                                to.push((Reverse(finance), p));
-                            } else {
-                                // do nothing
-                            }
-                        }
+                        nxt.try_push(finance, p, pi);
                     }
                 }
-                (
-                    to.into_iter()
-                        .rev()
-                        .map(|(Reverse(f), p)| (f, p))
-                        .collect_vec(),
-                    pre,
-                )
             }
             #[inline(always)]
             pub fn mutate(
                 &mut self,
                 nxt_finance: Finance,
-                pre: &[[Pos; N]; N],
+                pre_pos: &[[Pos; N]; N],
                 nxt_hub: Pos,
                 solver: &Solver,
             ) {
@@ -6820,7 +6838,7 @@ mod solver {
                 let mut v = nxt_hub;
                 let mut add_bridge_num = 0;
                 loop {
-                    let pv = pre[v.y][v.x];
+                    let pv = pre_pos[v.y][v.x];
                     if v == pv {
                         break;
                     }
