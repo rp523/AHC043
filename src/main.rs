@@ -6330,7 +6330,6 @@ mod solver {
     const COST_HUB: i64 = 5000;
     const COST_BRIDGE: i64 = 100;
     const BEAM_WIDTH: usize = 20;
-    const PROPOSE_NUM: usize = 10;
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
     pub struct Pos {
         y: usize,
@@ -6363,6 +6362,7 @@ mod solver {
         hash: Vec<Vec<u64>>,
     }
     impl Solver {
+        #[inline(always)]
         pub fn new() -> Self {
             let t0 = Instant::now();
             let _n = read::<usize>();
@@ -6430,9 +6430,10 @@ mod solver {
                 hash,
             }
         }
+        #[inline(always)]
         fn initialize(&self) -> Vec<State> {
             let mut income_delta = BTreeMap::new();
-            for (com, fee) in self.com.iter().zip(self.fee.iter().copied()) {
+            for (i, (com, fee)) in self.com.iter().zip(self.fee.iter().copied()).enumerate() {
                 let com0 = com[0];
                 let com1 = com[1];
                 for &hub0 in self.around[com0.y][com0.x].iter() {
@@ -6443,12 +6444,16 @@ mod solver {
                         } else {
                             (hub1, hub0)
                         };
-                        *income_delta.entry((hub0, hub1)).or_insert(0) += fee;
+                        income_delta.entry((hub0, hub1)).or_insert((0, 0));
+                        let (income, zobrist) = income_delta.get_mut(&(hub0, hub1)).unwrap();
+                        *income += fee;
+                        *zobrist ^= self.hash[0][i];
+                        *zobrist ^= self.hash[1][i];
                     }
                 }
             }
-            let mut que = BinaryHeap::new();
-            for ((hub0, hub1), income_delta) in income_delta {
+            let mut que = StateQue::new();
+            for ((hub0, hub1), (income_delta, zobrist)) in income_delta {
                 let dist = hub0.dist(&hub1);
                 let cost = (dist - 1) * COST_BRIDGE + 2 * COST_HUB;
                 if self.ini_money < cost {
@@ -6464,20 +6469,14 @@ mod solver {
                     turn,
                     score,
                 };
-                if que.len() < BEAM_WIDTH {
-                    que.push((Reverse(finance), (hub0, hub1)));
-                } else {
-                    let (Reverse(f0), _) = que.peek().unwrap();
-                    if f0 < &finance {
-                        que.pop();
-                        que.push((Reverse(finance), (hub0, hub1)));
-                    }
-                }
+                que.try_push(finance, zobrist, (hub0, hub1), 0);
             }
-            que.into_iter()
-                .map(|(Reverse(finance), (h0, h1))| State::new(finance, vec![h0, h1], self))
+            que.to_vec_ini()
+                .into_iter()
+                .map(|(finance, (h0, h1))| State::new(finance, vec![h0, h1], self))
                 .collect_vec()
         }
+        #[inline(always)]
         pub fn solve(&self) -> Answer {
             let ini = self.initialize();
             let mut dp = vec![ini.into_iter().map(|s| (s, 0)).collect_vec()];
@@ -6534,12 +6533,15 @@ mod solver {
         buf: Vec<Vec<Option<(Pos, usize)>>>,
     }
     impl Answer {
+        #[inline(always)]
         fn new() -> Self {
             Self { buf: vec![] }
         }
+        #[inline(always)]
         fn add(&mut self, add_ans: Vec<Option<(Pos, usize)>>) {
             self.buf.push(add_ans);
         }
+        #[inline(always)]
         pub fn answer(self) {
             let mut rem = T;
             for ans in self.buf.into_iter().rev() {
@@ -6559,17 +6561,19 @@ mod solver {
     }
 
     pub struct StateQue {
-        que: DeletableBinaryHeap<(Reverse<Finance>, Pos, u64, usize)>,
-        hash_scores: HashMap<u64, (Finance, Pos, usize)>,
+        que: DeletableBinaryHeap<(Reverse<Finance>, (Pos, Pos), u64, usize)>,
+        hash_scores: HashMap<u64, (Finance, (Pos, Pos), usize)>,
     }
     impl StateQue {
+        #[inline(always)]
         pub fn new() -> Self {
             Self {
                 que: DeletableBinaryHeap::new(),
                 hash_scores: HashMap::new(),
             }
         }
-        pub fn try_push(&mut self, finance: Finance, zobrist: u64, pos: Pos, pi: usize) {
+        #[inline(always)]
+        pub fn try_push(&mut self, finance: Finance, zobrist: u64, pos: (Pos, Pos), pi: usize) {
             debug_assert_eq!(self.que.len(), self.hash_scores.len());
             if self.que.len() < BEAM_WIDTH {
                 if let Some(&(sim_finance, sim_pos, sim_pi)) = self.hash_scores.get(&zobrist) {
@@ -6612,6 +6616,7 @@ mod solver {
             }
             debug_assert_eq!(self.que.len(), self.hash_scores.len());
         }
+        #[inline(always)]
         pub fn to_vec(
             mut self,
             pre_states: &[(State, usize)],
@@ -6619,7 +6624,7 @@ mod solver {
             solver: &Solver,
         ) -> Vec<(State, usize)> {
             let mut ret = vec![];
-            while let Some((Reverse(nxt_finance), nxt_hub, nxt_zobrist, pi)) = self.que.pop() {
+            while let Some((Reverse(nxt_finance), (nxt_hub, _), nxt_zobrist, pi)) = self.que.pop() {
                 let mut nxt_state = pre_states[pi].0.clone();
                 nxt_state.mutate(nxt_finance, &pre_pos[pi], nxt_hub, solver);
                 debug_assert_eq!(nxt_state.zobrist, nxt_zobrist);
@@ -6627,6 +6632,15 @@ mod solver {
             }
             ret
         }
+        #[inline(always)]
+        pub fn to_vec_ini(mut self) -> Vec<(Finance, (Pos, Pos))> {
+            let mut ret = vec![];
+            while let Some((Reverse(nxt_finance), nxt_hubs, _nxt_zobrist, _pi)) = self.que.pop() {
+                ret.push((nxt_finance, nxt_hubs));
+            }
+            ret
+        }
+        #[inline(always)]
         pub fn is_empty(&mut self) -> bool {
             self.que.is_empty()
         }
@@ -6644,7 +6658,9 @@ mod solver {
             pub score: i64,
         }
         impl PartialOrd for Finance {
+            #[inline(always)]
             fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                #[inline(always)]
                 fn to_ord(finance: &Finance) -> (i64, Rational, i64) {
                     (
                         finance.score,
@@ -6656,6 +6672,7 @@ mod solver {
             }
         }
         impl Ord for Finance {
+            #[inline(always)]
             fn cmp(&self, other: &Self) -> Ordering {
                 self.partial_cmp(other).unwrap()
             }
@@ -6669,16 +6686,19 @@ mod solver {
             pub zobrist: u64,
         }
         impl PartialOrd for State {
+            #[inline(always)]
             fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
                 self.finance.partial_cmp(&other.finance)
             }
         }
         impl Ord for State {
+            #[inline(always)]
             fn cmp(&self, other: &Self) -> Ordering {
                 self.partial_cmp(other).unwrap()
             }
         }
         impl State {
+            #[inline(always)]
             pub fn new(finance: Finance, hubs: Vec<Pos>, solver: &Solver) -> Self {
                 let mut hub_field = HubField::new();
                 for &hub in hubs.iter() {
@@ -6727,6 +6747,7 @@ mod solver {
                     zobrist,
                 }
             }
+            #[inline(always)]
             pub fn gen_ans(
                 &self,
                 pstate: Option<&State>,
@@ -6870,7 +6891,7 @@ mod solver {
                         let Some(finance) = self.calc_finance(add_bridge_num, income_delta) else {
                             continue;
                         };
-                        nxt.try_push(finance, zobrist, p, pi);
+                        nxt.try_push(finance, zobrist, (p, Pos::new(0, 0)), pi);
                     }
                 }
             }
