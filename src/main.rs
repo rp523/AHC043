@@ -5359,6 +5359,13 @@ mod deletable_binary_heap {
             self.del_rsv.push(del_v.clone());
             debug_assert!(self.que.iter().any(|v| v == del_v));
         }
+        pub fn is_empty(&mut self) -> bool {
+            self.lazy_eval();
+            self.que.is_empty()
+        }
+        pub fn len(&self) -> usize {
+            self.que.len() - self.del_rsv.len()
+        }
         fn lazy_eval(&mut self) {
             while let Some(del_v) = self.del_rsv.peek() {
                 if let Some(v) = self.que.peek() {
@@ -6353,6 +6360,7 @@ mod solver {
         near4: Vec<Vec<Vec<Pos>>>,
         around: Vec<Vec<Vec<Pos>>>,
         com_field: [[[Option<usize>; N]; N]; 2],
+        hash: Vec<Vec<u64>>,
     }
     impl Solver {
         pub fn new() -> Self {
@@ -6405,6 +6413,12 @@ mod solver {
                     com_field[ci][com.y][com.x] = Some(i);
                 }
             }
+            let hash = {
+                let mut rand = XorShift64::new();
+                (0..2)
+                    .map(|_| (0..m).map(|_| rand.next_usize() as u64).collect_vec())
+                    .collect_vec()
+            };
             Self {
                 t0,
                 com,
@@ -6413,6 +6427,7 @@ mod solver {
                 near4,
                 around,
                 com_field,
+                hash,
             }
         }
         fn initialize(&self) -> Vec<State> {
@@ -6544,43 +6559,75 @@ mod solver {
     }
 
     pub struct StateQue {
-        que: BinaryHeap<(Reverse<Finance>, Pos, usize)>,
-        hash_scores: HashMap<u64, Finance>,
+        que: DeletableBinaryHeap<(Reverse<Finance>, Pos, u64, usize)>,
+        hash_scores: HashMap<u64, (Finance, Pos, usize)>,
     }
     impl StateQue {
         pub fn new() -> Self {
             Self {
-                que: BinaryHeap::new(),
+                que: DeletableBinaryHeap::new(),
                 hash_scores: HashMap::new(),
             }
         }
-        pub fn try_push(&mut self, finance: Finance, pos: Pos, pi: usize) {
+        pub fn try_push(&mut self, finance: Finance, zobrist: u64, pos: Pos, pi: usize) {
+            debug_assert_eq!(self.que.len(), self.hash_scores.len());
             if self.que.len() < BEAM_WIDTH {
-                self.que.push((Reverse(finance), pos, pi));
+                if let Some(&(sim_finance, sim_pos, sim_pi)) = self.hash_scores.get(&zobrist) {
+                    if sim_finance < finance {
+                        // remove similar
+                        self.que
+                            .remove(&(Reverse(sim_finance), sim_pos, zobrist, sim_pi));
+                        self.hash_scores.remove(&zobrist).unwrap();
+                        // add
+                        self.que.push((Reverse(finance), pos, zobrist, pi));
+                        self.hash_scores.insert(zobrist, (finance, pos, pi));
+                    }
+                } else {
+                    // add
+                    self.que.push((Reverse(finance), pos, zobrist, pi));
+                    self.hash_scores.insert(zobrist, (finance, pos, pi));
+                }
             } else {
-                let (Reverse(al_finance), _, _) = self.que.peek().unwrap();
-                if al_finance < &finance {
-                    self.que.pop();
-                    self.que.push((Reverse(finance), pos, pi));
+                let &(Reverse(top_finance), _top_pos, top_hash, _top_pi) = self.que.peek().unwrap();
+                if top_finance < finance {
+                    if let Some(&(sim_finance, sim_pos, sim_pi)) = self.hash_scores.get(&zobrist) {
+                        if sim_finance < finance {
+                            // remove similar
+                            self.que
+                                .remove(&(Reverse(sim_finance), sim_pos, zobrist, sim_pi));
+                            self.hash_scores.remove(&zobrist).unwrap();
+                            // add
+                            self.que.push((Reverse(finance), pos, zobrist, pi));
+                            self.hash_scores.insert(zobrist, (finance, pos, pi));
+                        }
+                    } else {
+                        // remove top
+                        self.que.pop().unwrap();
+                        self.hash_scores.remove(&top_hash).unwrap();
+                        // add
+                        self.que.push((Reverse(finance), pos, zobrist, pi));
+                        self.hash_scores.insert(zobrist, (finance, pos, pi));
+                    }
                 }
             }
+            debug_assert_eq!(self.que.len(), self.hash_scores.len());
         }
         pub fn to_vec(
-            self,
+            mut self,
             pre_states: &[(State, usize)],
             pre_pos: &[[[Pos; N]; N]],
             solver: &Solver,
         ) -> Vec<(State, usize)> {
-            self.que
-                .into_iter()
-                .map(|(Reverse(nxt_finance), nxt_hub, pi)| {
-                    let mut nxt_state = pre_states[pi].0.clone();
-                    nxt_state.mutate(nxt_finance, &pre_pos[pi], nxt_hub, solver);
-                    (nxt_state, pi)
-                })
-                .collect_vec()
+            let mut ret = vec![];
+            while let Some((Reverse(nxt_finance), nxt_hub, nxt_zobrist, pi)) = self.que.pop() {
+                let mut nxt_state = pre_states[pi].0.clone();
+                nxt_state.mutate(nxt_finance, &pre_pos[pi], nxt_hub, solver);
+                debug_assert_eq!(nxt_state.zobrist, nxt_zobrist);
+                ret.push((nxt_state, pi));
+            }
+            ret
         }
-        pub fn is_empty(&self) -> bool {
+        pub fn is_empty(&mut self) -> bool {
             self.que.is_empty()
         }
     }
@@ -6619,6 +6666,7 @@ mod solver {
             bridge_field: BridgeField,
             commute: Vec<FixedBitSet>,
             pub finance: Finance,
+            pub zobrist: u64,
         }
         impl PartialOrd for State {
             fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -6637,6 +6685,7 @@ mod solver {
                     hub_field.set(hub);
                 }
                 let mut commute = vec![FixedBitSet::with_capacity(solver.com.len()); 2];
+                let mut zobrist = 0;
                 for hub in hubs.iter() {
                     for &p in solver.around[hub.y][hub.x].iter() {
                         for ci in 0..2 {
@@ -6645,6 +6694,7 @@ mod solver {
                             };
                             debug_assert!(!commute[ci].contains(i));
                             commute[ci].set(i, true);
+                            zobrist ^= solver.hash[ci][i];
                         }
                     }
                 }
@@ -6674,6 +6724,7 @@ mod solver {
                     bridge_field,
                     commute,
                     finance,
+                    zobrist,
                 }
             }
             pub fn gen_ans(
@@ -6800,28 +6851,26 @@ mod solver {
                             continue;
                         }
                         let add_bridge_num = max(dist[p.y][p.x] - 1, 0);
-                        let income_delta = (0..2)
-                            .map(|ci| {
-                                solver.around[p.y][p.x]
-                                    .iter()
-                                    .filter_map(|np| solver.com_field[ci][np.y][np.x])
-                                    .map(|i| {
-                                        if !self.commute[ci].contains(i)
-                                            && self.commute[ci ^ 1].contains(i)
-                                        {
-                                            solver.fee[i]
-                                        } else {
-                                            0
-                                        }
-                                    })
-                                    .sum::<i64>()
-                            })
-                            .sum::<i64>();
+                        let mut zobrist = self.zobrist;
+                        let mut income_delta = 0;
+                        for ci in 0..2 {
+                            for np in solver.around[p.y][p.x].iter() {
+                                let Some(i) = solver.com_field[ci][np.y][np.x] else {
+                                    continue;
+                                };
+                                if !self.commute[ci].contains(i) {
+                                    zobrist ^= solver.hash[ci][i];
+                                    if self.commute[ci ^ 1].contains(i) {
+                                        income_delta += solver.fee[i];
+                                    }
+                                }
+                            }
+                        }
 
                         let Some(finance) = self.calc_finance(add_bridge_num, income_delta) else {
                             continue;
                         };
-                        nxt.try_push(finance, p, pi);
+                        nxt.try_push(finance, zobrist, p, pi);
                     }
                 }
             }
@@ -6854,6 +6903,7 @@ mod solver {
                         if let Some(i) = com_field[p.y][p.x] {
                             if !self.commute[ci].contains(i) {
                                 self.commute[ci].set(i, true);
+                                self.zobrist ^= solver.hash[ci][i];
                                 if self.commute[ci ^ 1].contains(i) {
                                     income_delta += solver.fee[i];
                                 }
