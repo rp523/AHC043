@@ -6722,17 +6722,21 @@ mod solver {
                     let mut bridge_field = BridgeField::new();
                     let mut v = hubs[0];
                     let t = hubs[1];
-                    loop {
-                        let nv = if v.y < t.y {
-                            Pos::new(v.y + 1, v.x)
-                        } else if v.y > t.y {
-                            Pos::new(v.y - 1, v.x)
-                        } else if v.x < t.x {
-                            Pos::new(v.y, v.x + 1)
-                        } else if v.x > t.x {
-                            Pos::new(v.y, v.x - 1)
+                    while v != t {
+                        let dy = t.y as i64 - v.y as i64;
+                        let dx = t.x as i64 - v.x as i64;
+                        let nv = if dy.abs() > dx.abs() {
+                            if dy > 0 {
+                                Pos::new(v.y + 1, v.x)
+                            } else {
+                                Pos::new(v.y - 1, v.x)
+                            }
                         } else {
-                            break;
+                            if dx > 0 {
+                                Pos::new(v.y, v.x + 1)
+                            } else {
+                                Pos::new(v.y, v.x - 1)
+                            }
                         };
                         bridge_field.connect(v, nv);
                         v = nv;
@@ -6847,7 +6851,9 @@ mod solver {
                 while let Some(p0) = que.pop_front() {
                     let d0 = dist[p0.y][p0.x];
                     let p0_is_bridge = self.is_bridge(p0, &solver);
-                    for &p1 in solver.near4[p0.y][p0.x].iter() {
+                    let ln = solver.near4[p0.y][p0.x].len();
+                    for di in 0..ln {
+                        let p1 = solver.near4[p0.y][p0.x][(p0.y + p0.x + di) % ln];
                         let connected = self.is_connected(p0, p1);
                         let p1_is_bridge = self.is_bridge(p1, &solver);
                         if !connected && (p0_is_bridge || p1_is_bridge) {
