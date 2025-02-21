@@ -6321,7 +6321,7 @@ mod solver {
     const T: usize = 800;
     const COST_HUB: i64 = 5000;
     const COST_BRIDGE: i64 = 100;
-    const BEAM_WIDTH: usize = 10;
+    const BEAM_WIDTH: usize = 20;
     const PROPOSE_NUM: usize = 10;
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
     pub struct Pos {
@@ -6415,23 +6415,56 @@ mod solver {
             }
         }
         fn initialize(&self) -> Vec<State> {
-            let mut states = vec![];
-            for hy in 0..N {
-                for hx in 0..N {
-                    if (0..2).any(|ci| {
-                        self.around[hy][hx]
-                            .iter()
-                            .any(|p| self.com_field[ci][p.y][p.x].is_some())
-                    }) {
-                        let state = State::new(Pos::new(hy, hx), &self);
-                        states.push(state);
+            let mut income_delta = BTreeMap::new();
+            for (com, fee) in self.com.iter().zip(self.fee.iter().copied()) {
+                let com0 = com[0];
+                let com1 = com[1];
+                for &hub0 in self.around[com0.y][com0.x].iter() {
+                    for &hub1 in self.around[com1.y][com1.x].iter() {
+                        debug_assert_ne!(hub0, hub1);
+                        let (hub0, hub1) = if hub0 < hub1 {
+                            (hub0, hub1)
+                        } else {
+                            (hub1, hub0)
+                        };
+                        *income_delta.entry((hub0, hub1)).or_insert(0) += fee;
                     }
                 }
             }
-            states
+            let mut que = BinaryHeap::new();
+            for ((hub0, hub1), income_delta) in income_delta {
+                let dist = hub0.dist(&hub1);
+                let cost = (dist - 1) * COST_BRIDGE + 2 * COST_HUB;
+                if self.ini_money < cost {
+                    continue;
+                }
+                let gain_start = dist + 1;
+                let score = (T as i64 - gain_start) * income_delta - cost;
+                let turn = gain_start as usize + 1;
+                let money = self.ini_money - cost + income_delta;
+                let finance = Finance {
+                    income: income_delta,
+                    money,
+                    turn,
+                    score,
+                };
+                if que.len() < BEAM_WIDTH {
+                    que.push((Reverse(finance), (hub0, hub1)));
+                } else {
+                    let (Reverse(f0), _) = que.peek().unwrap();
+                    if f0 < &finance {
+                        que.pop();
+                        que.push((Reverse(finance), (hub0, hub1)));
+                    }
+                }
+            }
+            que.into_iter()
+                .map(|(Reverse(finance), (h0, h1))| State::new(finance, vec![h0, h1], self))
+                .collect_vec()
         }
         pub fn solve(&self) -> Answer {
-            let mut dp = vec![self.initialize().into_iter().map(|s| (s, 0)).collect_vec()];
+            let ini = self.initialize();
+            let mut dp = vec![ini.into_iter().map(|s| (s, 0)).collect_vec()];
             let mut best = None;
             let mut best_at = (0, 0);
             for ti in 1.. {
@@ -6526,9 +6559,9 @@ mod solver {
         use std::collections::{BinaryHeap, VecDeque};
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub struct Finance {
-            money: i64,
-            income: i64,
-            turn: usize,
+            pub money: i64,
+            pub income: i64,
+            pub turn: usize,
             pub score: i64,
         }
         impl PartialOrd for Finance {
@@ -6566,31 +6599,49 @@ mod solver {
             }
         }
         impl State {
-            pub fn new(ini_hub: Pos, solver: &Solver) -> Self {
+            pub fn new(finance: Finance, hubs: Vec<Pos>, solver: &Solver) -> Self {
                 let mut hub_field = HubField::new();
-                hub_field.set(ini_hub);
+                for &hub in hubs.iter() {
+                    hub_field.set(hub);
+                }
                 let mut commute = vec![FixedBitSet::with_capacity(solver.com.len()); 2];
-                for &p in solver.around[ini_hub.y][ini_hub.x].iter() {
-                    for ci in 0..2 {
-                        let Some(i) = solver.com_field[ci][p.y][p.x] else {
-                            continue;
-                        };
-                        debug_assert!(!commute[ci].contains(i));
-                        commute[ci].set(i, true);
-                        debug_assert!(!commute[ci ^ 1].contains(i));
+                for hub in hubs.iter() {
+                    for &p in solver.around[hub.y][hub.x].iter() {
+                        for ci in 0..2 {
+                            let Some(i) = solver.com_field[ci][p.y][p.x] else {
+                                continue;
+                            };
+                            debug_assert!(!commute[ci].contains(i));
+                            commute[ci].set(i, true);
+                        }
                     }
                 }
-                let bridge_field = BridgeField::new();
+                let bridge_field = {
+                    let mut bridge_field = BridgeField::new();
+                    let mut v = hubs[0];
+                    let t = hubs[1];
+                    loop {
+                        let nv = if v.y < t.y {
+                            Pos::new(v.y + 1, v.x)
+                        } else if v.y > t.y {
+                            Pos::new(v.y - 1, v.x)
+                        } else if v.x < t.x {
+                            Pos::new(v.y, v.x + 1)
+                        } else if v.x > t.x {
+                            Pos::new(v.y, v.x - 1)
+                        } else {
+                            break;
+                        };
+                        bridge_field.connect(v, nv);
+                        v = nv;
+                    }
+                    bridge_field
+                };
                 Self {
                     hub_field,
                     bridge_field,
                     commute,
-                    finance: Finance {
-                        money: solver.ini_money - COST_HUB,
-                        income: 0,
-                        turn: 1,
-                        score: 0,
-                    },
+                    finance,
                 }
             }
             pub fn gen_ans(
@@ -6615,31 +6666,7 @@ mod solver {
                         for x in 0..N {
                             p.x = x;
                             if self.is_bridge(p, solver) && !pstate.is_bridge(p, solver) {
-                                let mut dsum = (0, 0);
-                                let mut dy_max = 0;
-                                for &np in solver.near4[p.y][p.x].iter() {
-                                    if self.is_connected(p, np) {
-                                        let dy = np.y as i64 - p.y as i64;
-                                        let dx = np.x as i64 - p.x as i64;
-                                        dsum.0 += dy;
-                                        dsum.1 += dx;
-                                        dy_max.chmax(dy);
-                                    }
-                                }
-                                let dir = match dsum {
-                                    (1, 1) => 6,
-                                    (-1, 1) => 5,
-                                    (1, -1) => 3,
-                                    (-1, -1) => 4,
-                                    (0, 0) => {
-                                        if dy_max != 0 {
-                                            2
-                                        } else {
-                                            1
-                                        }
-                                    }
-                                    _ => unreachable!(),
-                                };
+                                let dir = self.bridge_dir(p, solver);
                                 add_ans.push(Some((p, dir)));
                             }
                         }
@@ -6654,11 +6681,42 @@ mod solver {
                             p.x = x;
                             if self.hub_field.has(p) {
                                 add_ans.push(Some((p, 0)));
+                            } else if self.is_bridge(p, solver) {
+                                let dir = self.bridge_dir(p, solver);
+                                add_ans.push(Some((p, dir)));
                             }
                         }
                     }
                 }
                 add_ans
+            }
+            #[inline(always)]
+            fn bridge_dir(&self, p: Pos, solver: &Solver) -> usize {
+                let mut dsum = (0, 0);
+                let mut dy_max = 0;
+                for &np in solver.near4[p.y][p.x].iter() {
+                    if self.is_connected(p, np) {
+                        let dy = np.y as i64 - p.y as i64;
+                        let dx = np.x as i64 - p.x as i64;
+                        dsum.0 += dy;
+                        dsum.1 += dx;
+                        dy_max.chmax(dy);
+                    }
+                }
+                match dsum {
+                    (1, 1) => 6,
+                    (-1, 1) => 5,
+                    (1, -1) => 3,
+                    (-1, -1) => 4,
+                    (0, 0) => {
+                        if dy_max != 0 {
+                            2
+                        } else {
+                            1
+                        }
+                    }
+                    _ => unreachable!(),
+                }
             }
             #[inline(always)]
             pub fn propose_new(
@@ -6815,7 +6873,7 @@ mod solver {
                 self.finance = nxt_finance;
             }
             #[inline(always)]
-            fn calc_finance(&self, add_bridge_num: i64, income_delta: i64) -> Option<Finance> {
+            pub fn calc_finance(&self, add_bridge_num: i64, income_delta: i64) -> Option<Finance> {
                 let mut fall = 0;
                 if add_bridge_num > 0 {
                     fall.chmax(COST_BRIDGE);
@@ -6941,5 +6999,5 @@ mod solver {
             }
         }
     }
-    use state::State;
+    use state::{Finance, State};
 }
