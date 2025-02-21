@@ -6430,7 +6430,6 @@ mod solver {
                 hash,
             }
         }
-        #[inline(always)]
         fn initialize(&self) -> Vec<State> {
             let mut income_delta = BTreeMap::new();
             for (i, (com, fee)) in self.com.iter().zip(self.fee.iter().copied()).enumerate() {
@@ -6476,7 +6475,6 @@ mod solver {
                 .map(|(finance, (h0, h1))| State::new(finance, vec![h0, h1], self))
                 .collect_vec()
         }
-        #[inline(always)]
         pub fn solve(&self) -> Answer {
             let ini = self.initialize();
             let mut dp = vec![ini.into_iter().map(|s| (s, 0)).collect_vec()];
@@ -6484,7 +6482,6 @@ mod solver {
             let mut best_at = (0, 0);
             let mut pre_pos = Vec::with_capacity(dp[0].len());
             for ti in 1.. {
-                eprintln!("{ti}");
                 let mut nxt = StateQue::new();
                 for _ in pre_pos.len()..dp.last().unwrap().len() {
                     pre_pos.push([[Pos::new(0, 0); N]; N]);
@@ -6507,7 +6504,7 @@ mod solver {
                         best_at = (ti, i);
                     }
                 }
-                if self.t0.elapsed().as_millis() > 2500 {
+                if self.t0.elapsed().as_millis() > 2850 {
                     break;
                 }
             }
