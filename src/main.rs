@@ -6362,7 +6362,6 @@ mod solver {
         hash: Vec<Vec<u64>>,
     }
     impl Solver {
-        #[inline(always)]
         pub fn new() -> Self {
             let t0 = Instant::now();
             let _n = read::<usize>();
@@ -6407,10 +6406,10 @@ mod solver {
                     }
                 }
             }
-            let mut com_field = [[[None; N]; N]; 2];
+            let mut com_field = vec![vec![vec![]; N]; N];
             for (i, com) in com.iter().enumerate() {
                 for (ci, com) in com.iter().enumerate() {
-                    com_field[ci][com.y][com.x] = Some(i);
+                    com_field[com.y][com.x].push((ci, i));
                 }
             }
             let hub_reach = around
@@ -6420,11 +6419,8 @@ mod solver {
                         .iter()
                         .map(|around| {
                             let mut hub_reach = vec![];
-                            for ci in 0..2 {
-                                for p in around.iter() {
-                                    let Some(i) = com_field[ci][p.y][p.x] else {
-                                continue;
-                            };
+                            for p in around.iter() {
+                                for &(ci, i) in com_field[p.y][p.x].iter() {
                                     hub_reach.push((ci, i));
                                 }
                             }
@@ -6550,15 +6546,12 @@ mod solver {
         buf: Vec<Vec<Option<(Pos, usize)>>>,
     }
     impl Answer {
-        #[inline(always)]
         fn new() -> Self {
             Self { buf: vec![] }
         }
-        #[inline(always)]
         fn add(&mut self, add_ans: Vec<Option<(Pos, usize)>>) {
             self.buf.push(add_ans);
         }
-        #[inline(always)]
         pub fn answer(self) {
             let mut rem = T;
             for ans in self.buf.into_iter().rev() {
@@ -6582,7 +6575,6 @@ mod solver {
         hash_scores: HashMap<u64, (Finance, (Pos, Pos), usize)>,
     }
     impl StateQue {
-        #[inline(always)]
         pub fn new() -> Self {
             Self {
                 que: DeletableBinaryHeap::new(),
@@ -6633,7 +6625,6 @@ mod solver {
             }
             debug_assert_eq!(self.que.len(), self.hash_scores.len());
         }
-        #[inline(always)]
         pub fn to_vec(
             mut self,
             pre_states: &[(State, usize)],
@@ -6649,7 +6640,6 @@ mod solver {
             }
             ret
         }
-        #[inline(always)]
         pub fn to_vec_ini(mut self) -> Vec<(Finance, (Pos, Pos))> {
             let mut ret = vec![];
             while let Some((Reverse(nxt_finance), nxt_hubs, _nxt_zobrist, _pi)) = self.que.pop() {
@@ -6657,7 +6647,6 @@ mod solver {
             }
             ret
         }
-        #[inline(always)]
         pub fn is_empty(&mut self) -> bool {
             self.que.is_empty()
         }
@@ -6716,7 +6705,6 @@ mod solver {
             }
         }
         impl State {
-            #[inline(always)]
             pub fn new(finance: Finance, hubs: Vec<Pos>, solver: &Solver) -> Self {
                 let mut hub_field = HubField::new();
                 for &hub in hubs.iter() {
@@ -6726,11 +6714,17 @@ mod solver {
                 let mut zobrist = 0;
                 for hub in hubs.iter() {
                     for &(ci, i) in solver.hub_reach[hub.y][hub.x].iter() {
-                        debug_assert!(!commute.contains(ci, i));
                         commute.set(ci, i);
                         zobrist ^= solver.hash[ci][i];
                     }
                 }
+                debug_assert_eq!(
+                    (0..solver.com.len())
+                        .filter(|&i| commute.contains(0, i) && commute.contains(1, i))
+                        .map(|i| solver.fee[i])
+                        .sum::<i64>(),
+                    finance.income
+                );
                 let bridge_field = {
                     let mut bridge_field = BridgeField::new();
                     let mut v = hubs[0];
@@ -6764,7 +6758,6 @@ mod solver {
                     zobrist,
                 }
             }
-            #[inline(always)]
             pub fn gen_ans(
                 &self,
                 pstate: Option<&State>,
@@ -6811,7 +6804,6 @@ mod solver {
                 }
                 add_ans
             }
-            #[inline(always)]
             fn bridge_dir(&self, p: Pos, solver: &Solver) -> usize {
                 let mut dsum = (0, 0);
                 let mut dy_max = 0;
@@ -6839,7 +6831,6 @@ mod solver {
                     _ => unreachable!(),
                 }
             }
-            #[inline(always)]
             pub fn propose_new(
                 &self,
                 pre_pos: &mut [[Pos; N]; N],
@@ -6909,7 +6900,25 @@ mod solver {
                     }
                 }
             }
-            #[inline(always)]
+            fn show_built_hubs(&self, solver: &Solver) {
+                let mut cnt = vec![BTreeSet::new(); solver.com.len()];
+                for y in 0..N {
+                    for x in 0..N {
+                        let p = Pos::new(y, x);
+                        if self.hub_field.contains(p) {
+                            for &(ci, i) in solver.hub_reach[y][x].iter() {
+                                cnt[i].insert(ci);
+                            }
+                        }
+                    }
+                }
+                for (i, cnt) in cnt.into_iter().enumerate() {
+                    if cnt.is_empty() {
+                        continue;
+                    }
+                    eprintln!("{i},{}: {:?}", solver.fee[i], cnt.into_iter().collect_vec());
+                }
+            }
             pub fn mutate(
                 &mut self,
                 nxt_finance: Finance,
