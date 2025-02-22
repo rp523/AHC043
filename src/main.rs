@@ -6329,7 +6329,7 @@ mod solver {
     const T: usize = 800;
     const COST_HUB: i64 = 5000;
     const COST_BRIDGE: i64 = 100;
-    const BEAM_WIDTH: usize = 32;
+    const BEAM_WIDTH: usize = 50;
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
     pub struct Pos {
         y: usize,
@@ -6358,7 +6358,7 @@ mod solver {
         ini_money: i64,
         near4: Vec<Vec<Vec<Pos>>>,
         around: Vec<Vec<Vec<Pos>>>,
-        com_field: [[[Option<usize>; N]; N]; 2],
+        hub_reach: Vec<Vec<Vec<(usize, usize)>>>,
         hash: Vec<Vec<u64>>,
     }
     impl Solver {
@@ -6413,6 +6413,26 @@ mod solver {
                     com_field[ci][com.y][com.x] = Some(i);
                 }
             }
+            let hub_reach = around
+                .iter()
+                .map(|around| {
+                    around
+                        .iter()
+                        .map(|around| {
+                            let mut hub_reach = vec![];
+                            for ci in 0..2 {
+                                for p in around.iter() {
+                                    let Some(i) = com_field[ci][p.y][p.x] else {
+                                continue;
+                            };
+                                    hub_reach.push((ci, i));
+                                }
+                            }
+                            hub_reach
+                        })
+                        .collect_vec()
+                })
+                .collect_vec();
             let hash = {
                 let mut rand = XorShift64::new();
                 (0..2)
@@ -6426,7 +6446,7 @@ mod solver {
                 ini_money,
                 near4,
                 around,
-                com_field,
+                hub_reach,
                 hash,
             }
         }
@@ -6705,15 +6725,10 @@ mod solver {
                 let mut commute = Commute::new(solver.com.len());
                 let mut zobrist = 0;
                 for hub in hubs.iter() {
-                    for &p in solver.around[hub.y][hub.x].iter() {
-                        for ci in 0..2 {
-                            let Some(i) = solver.com_field[ci][p.y][p.x] else {
-                                continue;
-                            };
-                            debug_assert!(!commute.contains(ci, i));
-                            commute.set(ci, i);
-                            zobrist ^= solver.hash[ci][i];
-                        }
+                    for &(ci, i) in solver.hub_reach[hub.y][hub.x].iter() {
+                        debug_assert!(!commute.contains(ci, i));
+                        commute.set(ci, i);
+                        zobrist ^= solver.hash[ci][i];
                     }
                 }
                 let bridge_field = {
@@ -6848,6 +6863,9 @@ mod solver {
                 }
                 while let Some(p0) = que.pop_front() {
                     let d0 = dist[p0.y][p0.x];
+                    if d0 >= N as i64 {
+                        break;
+                    }
                     let p0_is_bridge = self.is_bridge(p0, &solver);
                     let ln = solver.near4[p0.y][p0.x].len();
                     for di in 0..ln {
@@ -6878,20 +6896,14 @@ mod solver {
                         let add_bridge_num = max(dist[p.y][p.x] - 1, 0);
                         let mut zobrist = self.zobrist;
                         let mut income_delta = 0;
-                        for ci in 0..2 {
-                            for np in solver.around[p.y][p.x].iter() {
-                                let Some(i) = solver.com_field[ci][np.y][np.x] else {
-                                    continue;
-                                };
-                                if !self.commute.contains(ci, i) {
-                                    zobrist ^= solver.hash[ci][i];
-                                    if self.commute.contains(ci ^ 1, i) {
-                                        income_delta += solver.fee[i];
-                                    }
+                        for &(ci, i) in solver.hub_reach[p.y][p.x].iter() {
+                            if !self.commute.contains(ci, i) {
+                                zobrist ^= solver.hash[ci][i];
+                                if self.commute.contains(ci ^ 1, i) {
+                                    income_delta += solver.fee[i];
                                 }
                             }
                         }
-
                         let Some(finance) = self.calc_finance(add_bridge_num, income_delta) else {
                             continue;
                         };
@@ -6923,16 +6935,12 @@ mod solver {
                     v = pv;
                 }
                 let mut income_delta = 0;
-                for &p in solver.around[nxt_hub.y][nxt_hub.x].iter() {
-                    for (ci, com_field) in solver.com_field.iter().enumerate() {
-                        if let Some(i) = com_field[p.y][p.x] {
-                            if !self.commute.contains(ci, i) {
-                                self.commute.set(ci, i);
-                                self.zobrist ^= solver.hash[ci][i];
-                                if self.commute.contains(ci ^ 1, i) {
-                                    income_delta += solver.fee[i];
-                                }
-                            }
+                for &(ci, i) in solver.hub_reach[nxt_hub.y][nxt_hub.x].iter() {
+                    if !self.commute.contains(ci, i) {
+                        self.commute.set(ci, i);
+                        self.zobrist ^= solver.hash[ci][i];
+                        if self.commute.contains(ci ^ 1, i) {
+                            income_delta += solver.fee[i];
                         }
                     }
                 }
