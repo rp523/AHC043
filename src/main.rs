@@ -6525,7 +6525,10 @@ mod solver {
                 }
             }
             let (mut ti, mut i) = best_at;
-            eprintln!("{ti} {i} {}", self.ini_money - COST_HUB + dp[ti][i].0.finance.score);
+            eprintln!(
+                "{ti} {i} {}",
+                self.ini_money - COST_HUB + dp[ti][i].0.finance.score
+            );
             let mut ans = Answer::new();
             loop {
                 let (nstate, pi) = &dp[ti][i];
