@@ -6870,6 +6870,9 @@ mod solver {
                     let ln = solver.near4[p0.y][p0.x].len();
                     for di in 0..ln {
                         let p1 = solver.near4[p0.y][p0.x][(p0.y + p0.x + di) % ln];
+                        if dist[p1.y][p1.x] < INF {
+                            continue;
+                        }
                         let connected = self.is_connected(p0, p1);
                         let p1_is_bridge = self.is_bridge(p1, &solver);
                         if !connected && (p0_is_bridge || p1_is_bridge) {
@@ -6877,14 +6880,9 @@ mod solver {
                         }
                         let delta = if connected { 0 } else { 1 };
                         let d1 = d0 + delta;
-                        if dist[p1.y][p1.x].chmin(d1) {
-                            if delta == 0 {
-                                que.push_front(p1);
-                            } else {
-                                que.push_back(p1);
-                            }
-                            pre_pos[p1.y][p1.x] = p0;
-                        }
+                        dist[p1.y][p1.x] = d1;
+                        que.push_back(p1);
+                        pre_pos[p1.y][p1.x] = p0;
                     }
                 }
                 for y in 0..N {
