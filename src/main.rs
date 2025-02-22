@@ -6588,15 +6588,17 @@ mod solver {
         pub fn try_push(&mut self, finance: Finance, zobrist: u64, pos: (Pos, Pos), pi: usize) {
             debug_assert_eq!(self.que.len(), self.hash_scores.len());
             if self.que.len() < BEAM_WIDTH {
-                if let Some(&(sim_finance, sim_pos, sim_pi)) = self.hash_scores.get(&zobrist) {
-                    if sim_finance < finance {
+                if let Some((sim_finance, sim_pos, sim_pi)) = self.hash_scores.get_mut(&zobrist) {
+                    if *sim_finance < finance {
                         // remove similar
                         self.que
-                            .remove(&(Reverse(sim_finance), sim_pos, zobrist, sim_pi));
-                        self.hash_scores.remove(&zobrist).unwrap();
+                            .remove(&(Reverse(*sim_finance), *sim_pos, zobrist, *sim_pi));
+
                         // add
                         self.que.push((Reverse(finance), pos, zobrist, pi));
-                        self.hash_scores.insert(zobrist, (finance, pos, pi));
+                        *sim_finance = finance;
+                        *sim_pos = pos;
+                        *sim_pi = pi;
                     }
                 } else {
                     // add
@@ -6606,15 +6608,17 @@ mod solver {
             } else {
                 let &(Reverse(top_finance), _top_pos, top_hash, _top_pi) = self.que.peek().unwrap();
                 if top_finance < finance {
-                    if let Some(&(sim_finance, sim_pos, sim_pi)) = self.hash_scores.get(&zobrist) {
-                        if sim_finance < finance {
+                    if let Some((sim_finance, sim_pos, sim_pi)) = self.hash_scores.get_mut(&zobrist) {
+                        if *sim_finance < finance {
                             // remove similar
                             self.que
-                                .remove(&(Reverse(sim_finance), sim_pos, zobrist, sim_pi));
-                            self.hash_scores.remove(&zobrist).unwrap();
+                                .remove(&(Reverse(*sim_finance), *sim_pos, zobrist, *sim_pi));
+
                             // add
                             self.que.push((Reverse(finance), pos, zobrist, pi));
-                            self.hash_scores.insert(zobrist, (finance, pos, pi));
+                            *sim_finance = finance;
+                            *sim_pos = pos;
+                            *sim_pi = pi;
                         }
                     } else {
                         // remove top
