@@ -6475,7 +6475,7 @@ mod solver {
                     continue;
                 }
                 let gain_start = dist;
-                let score = self.ini_money + (T as i64 - gain_start) * income_delta - cost;
+                let score = (T as i64 - gain_start) * income_delta - (cost - COST_HUB);
                 let turn = gain_start as usize + 1;
                 let money = self.ini_money - cost + income_delta;
                 let finance = Finance {
@@ -6525,7 +6525,7 @@ mod solver {
                 }
             }
             let (mut ti, mut i) = best_at;
-            eprintln!("{ti} {i} {}", dp[ti][i].0.finance.score);
+            eprintln!("{ti} {i} {}", self.ini_money - COST_HUB + dp[ti][i].0.finance.score);
             let mut ans = Answer::new();
             loop {
                 let (nstate, pi) = &dp[ti][i];
