@@ -6671,6 +6671,45 @@ mod solver {
             pub turn: usize,
             pub score: i64,
         }
+        impl Finance {
+            #[inline(always)]
+            fn next(&self, add_bridge_num: i64, income_delta: i64) -> Option<Finance> {
+                let mut fall = 0;
+                if add_bridge_num > 0 {
+                    fall.chmax(COST_BRIDGE);
+                    fall.chmax(COST_BRIDGE + (COST_BRIDGE - self.income) * (add_bridge_num - 1));
+                }
+                fall.chmax((COST_BRIDGE - self.income) * add_bridge_num + COST_HUB);
+                let build_start = if self.money - fall >= 0 {
+                    self.turn
+                } else if self.income == 0 {
+                    return None;
+                } else {
+                    // now_money + income * d >= cost
+                    let elapse = (fall - self.money + self.income - 1) / self.income;
+                    self.turn + elapse as usize
+                };
+                let gain_start = build_start + add_bridge_num as usize;
+                let nxt_turn = gain_start + 1;
+                if nxt_turn >= T {
+                    return None;
+                }
+                let cost = add_bridge_num * COST_BRIDGE + COST_HUB;
+                let pay = (T - gain_start) as i64 * income_delta - cost;
+                let mut nxt_money = self.money;
+                nxt_money -= cost;
+                nxt_money += self.income * (nxt_turn - self.turn) as i64;
+                nxt_money += income_delta;
+                let nxt_income = self.income + income_delta;
+                let nxt_score = self.score + pay;
+                Some(Finance {
+                    money: nxt_money,
+                    income: nxt_income,
+                    turn: nxt_turn,
+                    score: nxt_score,
+                })
+            }
+        }
         impl PartialOrd for Finance {
             #[inline(always)]
             fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -6901,7 +6940,7 @@ mod solver {
                                 }
                             }
                         }
-                        let Some(finance) = self.calc_finance(add_bridge_num, income_delta) else {
+                        let Some(finance) = self.finance.next(add_bridge_num, income_delta) else {
                             continue;
                         };
                         nxt.try_push(finance, zobrist, (p, Pos::new(0, 0)), pi);
@@ -6961,50 +7000,10 @@ mod solver {
                 }
                 debug_assert_eq!(
                     Some(nxt_finance),
-                    self.calc_finance(add_bridge_num, income_delta)
+                    self.finance.next(add_bridge_num, income_delta)
                 );
                 self.hub_field.set(nxt_hub);
                 self.finance = nxt_finance;
-            }
-            #[inline(always)]
-            pub fn calc_finance(&self, add_bridge_num: i64, income_delta: i64) -> Option<Finance> {
-                let mut fall = 0;
-                if add_bridge_num > 0 {
-                    fall.chmax(COST_BRIDGE);
-                    fall.chmax(
-                        COST_BRIDGE + (COST_BRIDGE - self.finance.income) * (add_bridge_num - 1),
-                    );
-                }
-                fall.chmax((COST_BRIDGE - self.finance.income) * add_bridge_num + COST_HUB);
-                let build_start = if self.finance.money - fall >= 0 {
-                    self.finance.turn
-                } else if self.finance.income == 0 {
-                    return None;
-                } else {
-                    // now_money + income * d >= cost
-                    let elapse =
-                        (fall - self.finance.money + self.finance.income - 1) / self.finance.income;
-                    self.finance.turn + elapse as usize
-                };
-                let gain_start = build_start + add_bridge_num as usize;
-                let nxt_turn = gain_start + 1;
-                if nxt_turn >= T {
-                    return None;
-                }
-                let cost = add_bridge_num * COST_BRIDGE + COST_HUB;
-                let pay = (T - gain_start) as i64 * income_delta - cost;
-                let mut nxt_money = self.finance.money;
-                nxt_money -= cost;
-                nxt_money += self.finance.income * (nxt_turn - self.finance.turn) as i64;
-                nxt_money += income_delta;
-                let nxt_income = self.finance.income + income_delta;
-                let nxt_score = self.finance.score + pay;
-                Some(Finance {
-                    money: nxt_money,
-                    income: nxt_income,
-                    turn: nxt_turn,
-                    score: nxt_score,
-                })
             }
             #[inline(always)]
             fn is_connected(&self, p0: Pos, p1: Pos) -> bool {
