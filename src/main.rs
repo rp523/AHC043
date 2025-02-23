@@ -6329,7 +6329,7 @@ mod solver {
     const T: usize = 800;
     const COST_HUB: i64 = 5000;
     const COST_BRIDGE: i64 = 100;
-    const BEAM_WIDTH: usize = 50;
+    const BEAM_WIDTH: usize = 40;
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
     pub struct Pos {
         y: usize,
@@ -6608,7 +6608,8 @@ mod solver {
             } else {
                 let &(Reverse(top_finance), _top_pos, top_hash, _top_pi) = self.que.peek().unwrap();
                 if top_finance < finance {
-                    if let Some((sim_finance, sim_pos, sim_pi)) = self.hash_scores.get_mut(&zobrist) {
+                    if let Some((sim_finance, sim_pos, sim_pi)) = self.hash_scores.get_mut(&zobrist)
+                    {
                         if *sim_finance < finance {
                             // remove similar
                             self.que
