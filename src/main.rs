@@ -6360,6 +6360,7 @@ mod solver {
         around: Vec<Vec<Vec<Pos>>>,
         hub_reach: Vec<Vec<Vec<(usize, usize)>>>,
         hash: Vec<Vec<u64>>,
+        is_unique: [[bool; N]; N],
     }
     impl Solver {
         pub fn new() -> Self {
@@ -6412,7 +6413,7 @@ mod solver {
                     com_field[com.y][com.x].push((ci, i));
                 }
             }
-            let hub_reach = around
+            let mut hub_reach = around
                 .iter()
                 .map(|around| {
                     around
@@ -6429,6 +6430,33 @@ mod solver {
                         .collect_vec()
                 })
                 .collect_vec();
+            hub_reach
+                .iter_mut()
+                .for_each(|hub_reach| hub_reach.iter_mut().for_each(|hub_reach| hub_reach.sort()));
+            let is_unique = {
+                let mut unique: HashMap<&Vec<(usize, usize)>, Pos> = HashMap::new();
+                let mut p = Pos::new(0, 0);
+                let c = Pos::new(N / 2, N / 2);
+                for (y, hub_reach) in hub_reach.iter().enumerate() {
+                    p.y = y;
+                    for (x, hub_reach) in hub_reach.iter().enumerate() {
+                        p.x = x;
+                        if let Some(op) = unique.get_mut(hub_reach) {
+                            if p.dist(&c) < op.dist(&c) {
+                                *op = p;
+                            }
+                        } else {
+                            unique.insert(hub_reach, p);
+                        }
+                    }
+                }
+                debug_assert!(unique.len() <= N * N);
+                let mut is_unique = [[false; N]; N];
+                for (_, p) in unique.into_iter() {
+                    is_unique[p.y][p.x] = true;
+                }
+                is_unique
+            };
             let hash = {
                 let mut rand = XorShift64::new();
                 (0..2)
@@ -6444,15 +6472,22 @@ mod solver {
                 around,
                 hub_reach,
                 hash,
+                is_unique,
             }
         }
-        fn initialize(&self) -> Vec<State> {
+        fn initialize(&self) -> Vec<(State, usize)> {
             let mut income_delta = BTreeMap::new();
             for (i, (com, fee)) in self.com.iter().zip(self.fee.iter().copied()).enumerate() {
                 let com0 = com[0];
                 let com1 = com[1];
                 for &hub0 in self.around[com0.y][com0.x].iter() {
+                    if !self.is_unique[hub0.y][hub0.x] {
+                        continue;
+                    }
                     for &hub1 in self.around[com1.y][com1.x].iter() {
+                        if !self.is_unique[hub1.y][hub1.x] {
+                            continue;
+                        }
                         debug_assert_ne!(hub0, hub1);
                         let (hub0, hub1) = if hub0 < hub1 {
                             (hub0, hub1)
@@ -6488,12 +6523,11 @@ mod solver {
             }
             que.to_vec_ini()
                 .into_iter()
-                .map(|(finance, (h0, h1))| State::new(finance, vec![h0, h1], self))
+                .map(|(finance, (h0, h1))| (State::new(finance, vec![h0, h1], self), 0))
                 .collect_vec()
         }
         pub fn solve(&self) -> Answer {
-            let ini = self.initialize();
-            let mut dp = vec![ini.into_iter().map(|s| (s, 0)).collect_vec()];
+            let mut dp = vec![self.initialize()];
             let mut best = None;
             let mut best_at = (0, 0);
             let mut pre_pos = Vec::with_capacity(dp[0].len());
@@ -6520,7 +6554,7 @@ mod solver {
                         best_at = (ti, i);
                     }
                 }
-                if self.t0.elapsed().as_millis() > 2850 {
+                if self.t0.elapsed().as_millis() > 2900 {
                     break;
                 }
             }
@@ -6930,9 +6964,13 @@ mod solver {
                 for y in 0..N {
                     for x in 0..N {
                         let p = Pos::new(y, x);
-                        if self.hub_field.contains(p) || dist[y][x] >= INF {
+                        if !solver.is_unique[y][x]
+                            || dist[y][x] >= INF
+                            || self.hub_field.contains(p)
+                        {
                             continue;
                         }
+                        let p = Pos::new(y, x);
                         let add_bridge_num = max(dist[p.y][p.x] - 1, 0);
                         let mut zobrist = self.zobrist;
                         let mut income_delta = 0;
