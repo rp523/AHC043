@@ -6575,64 +6575,91 @@ mod solver {
     }
 
     pub struct StateQue {
-        que: DeletableBinaryHeap<(Reverse<Finance>, (Pos, Pos), u64, usize)>,
+        max_que: Vec<(Finance, (Pos, Pos), u64, usize)>,
+        rate_que: DeletableBinaryHeap<(Reverse<Finance>, (Pos, Pos), u64, usize)>,
         hash_scores: HashMap<u64, (Finance, (Pos, Pos), usize)>,
     }
     impl StateQue {
         pub fn new() -> Self {
             Self {
-                que: DeletableBinaryHeap::new(),
+                max_que: vec![],
+                rate_que: DeletableBinaryHeap::new(),
                 hash_scores: HashMap::new(),
             }
         }
         #[inline(always)]
         pub fn try_push(&mut self, finance: Finance, zobrist: u64, pos: (Pos, Pos), pi: usize) {
-            debug_assert_eq!(self.que.len(), self.hash_scores.len());
-            if self.que.len() < BEAM_WIDTH {
+            if self.max_que.is_empty() {
+                self.max_que.push((finance, pos, zobrist, pi));
+            } else {
+                let (al_finance, al_pos, al_zobrist, al_pi) = self.max_que[0];
+                if al_finance.score < finance.score {
+                    self.max_que[0] = (finance, pos, zobrist, pi);
+                    self.try_push_rate(al_finance, al_zobrist, al_pos, al_pi);
+                } else {
+                    self.try_push_rate(finance, zobrist, pos, pi);
+                }
+            }
+        }
+        #[inline(always)]
+        pub fn try_push_rate(
+            &mut self,
+            finance: Finance,
+            zobrist: u64,
+            pos: (Pos, Pos),
+            pi: usize,
+        ) {
+            debug_assert_eq!(self.rate_que.len(), self.hash_scores.len());
+            if self.rate_que.len() < BEAM_WIDTH {
                 if let Some((sim_finance, sim_pos, sim_pi)) = self.hash_scores.get_mut(&zobrist) {
                     if *sim_finance < finance {
                         // remove similar
-                        self.que
+                        self.rate_que
                             .remove(&(Reverse(*sim_finance), *sim_pos, zobrist, *sim_pi));
 
                         // add
-                        self.que.push((Reverse(finance), pos, zobrist, pi));
+                        self.rate_que.push((Reverse(finance), pos, zobrist, pi));
                         *sim_finance = finance;
                         *sim_pos = pos;
                         *sim_pi = pi;
                     }
                 } else {
                     // add
-                    self.que.push((Reverse(finance), pos, zobrist, pi));
+                    self.rate_que.push((Reverse(finance), pos, zobrist, pi));
                     self.hash_scores.insert(zobrist, (finance, pos, pi));
                 }
             } else {
-                let &(Reverse(top_finance), _top_pos, top_hash, _top_pi) = self.que.peek().unwrap();
+                let &(Reverse(top_finance), _top_pos, top_hash, _top_pi) =
+                    self.rate_que.peek().unwrap();
                 if top_finance < finance {
                     if let Some((sim_finance, sim_pos, sim_pi)) = self.hash_scores.get_mut(&zobrist)
                     {
                         if *sim_finance < finance {
                             // remove similar
-                            self.que
-                                .remove(&(Reverse(*sim_finance), *sim_pos, zobrist, *sim_pi));
+                            self.rate_que.remove(&(
+                                Reverse(*sim_finance),
+                                *sim_pos,
+                                zobrist,
+                                *sim_pi,
+                            ));
 
                             // add
-                            self.que.push((Reverse(finance), pos, zobrist, pi));
+                            self.rate_que.push((Reverse(finance), pos, zobrist, pi));
                             *sim_finance = finance;
                             *sim_pos = pos;
                             *sim_pi = pi;
                         }
                     } else {
                         // remove top
-                        self.que.pop().unwrap();
+                        self.rate_que.pop().unwrap();
                         self.hash_scores.remove(&top_hash).unwrap();
                         // add
-                        self.que.push((Reverse(finance), pos, zobrist, pi));
+                        self.rate_que.push((Reverse(finance), pos, zobrist, pi));
                         self.hash_scores.insert(zobrist, (finance, pos, pi));
                     }
                 }
             }
-            debug_assert_eq!(self.que.len(), self.hash_scores.len());
+            debug_assert_eq!(self.rate_que.len(), self.hash_scores.len());
         }
         pub fn to_vec(
             mut self,
@@ -6641,7 +6668,15 @@ mod solver {
             solver: &Solver,
         ) -> Vec<(State, usize)> {
             let mut ret = vec![];
-            while let Some((Reverse(nxt_finance), (nxt_hub, _), nxt_zobrist, pi)) = self.que.pop() {
+            while let Some((nxt_finance, (nxt_hub, _), nxt_zobrist, pi)) = self.max_que.pop() {
+                let mut nxt_state = pre_states[pi].0.clone();
+                nxt_state.mutate(nxt_finance, &pre_pos[pi], nxt_hub, solver);
+                debug_assert_eq!(nxt_state.zobrist, nxt_zobrist);
+                ret.push((nxt_state, pi));
+            }
+            while let Some((Reverse(nxt_finance), (nxt_hub, _), nxt_zobrist, pi)) =
+                self.rate_que.pop()
+            {
                 let mut nxt_state = pre_states[pi].0.clone();
                 nxt_state.mutate(nxt_finance, &pre_pos[pi], nxt_hub, solver);
                 debug_assert_eq!(nxt_state.zobrist, nxt_zobrist);
@@ -6651,13 +6686,18 @@ mod solver {
         }
         pub fn to_vec_ini(mut self) -> Vec<(Finance, (Pos, Pos))> {
             let mut ret = vec![];
-            while let Some((Reverse(nxt_finance), nxt_hubs, _nxt_zobrist, _pi)) = self.que.pop() {
+            while let Some((nxt_finance, nxt_hubs, _nxt_zobrist, _pi)) = self.max_que.pop() {
+                ret.push((nxt_finance, nxt_hubs));
+            }
+            while let Some((Reverse(nxt_finance), nxt_hubs, _nxt_zobrist, _pi)) =
+                self.rate_que.pop()
+            {
                 ret.push((nxt_finance, nxt_hubs));
             }
             ret
         }
         pub fn is_empty(&mut self) -> bool {
-            self.que.is_empty()
+            self.max_que.is_empty() && self.rate_que.is_empty()
         }
     }
 
@@ -6718,7 +6758,7 @@ mod solver {
                 fn to_ord(finance: &Finance) -> (OrderedFloat<f64>, i64, i64) {
                     (
                         OrderedFloat::<f64>(finance.score as f64)
-                            / OrderedFloat::<f64>((finance.turn as f64).sqrt()),
+                            / OrderedFloat::<f64>(finance.turn as f64),
                         finance.score,
                         finance.money,
                     )

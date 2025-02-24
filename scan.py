@@ -10,7 +10,9 @@ print("DEBUG: ", DEBUG)
 cmd = "cargo fmt && cargo build"
 if not DEBUG:
     cmd += " -r"
+print(cmd)
 ret = getoutput(cmd)
+print(ret)
 if not DEBUG:
     shutil.copy("target/release/atcoder.exe", bin_path)
 else:
