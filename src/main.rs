@@ -6446,7 +6446,7 @@ mod solver {
                 hash,
             }
         }
-        fn initialize(&self) -> Vec<State> {
+        fn initialize(&self) -> Vec<(State, usize)> {
             let mut income_delta = BTreeMap::new();
             for (i, (com, fee)) in self.com.iter().zip(self.fee.iter().copied()).enumerate() {
                 let com0 = com[0];
@@ -6488,20 +6488,17 @@ mod solver {
             }
             que.to_vec_ini()
                 .into_iter()
-                .map(|(finance, (h0, h1))| State::new(finance, vec![h0, h1], self))
+                .map(|(finance, (h0, h1))| (State::new(finance, vec![h0, h1], self), 0))
                 .collect_vec()
         }
         pub fn solve(&self) -> Answer {
-            let ini = self.initialize();
-            let mut dp = vec![ini.into_iter().map(|s| (s, 0)).collect_vec()];
+            let mut dp = vec![self.initialize()];
             let mut best = None;
             let mut best_at = (0, 0);
-            let mut pre_pos = Vec::with_capacity(dp[0].len());
+            let mut pre_pos = vec![[[Pos::new(0, 0); N]; N]; BEAM_WIDTH];
+            let mut dist = [[0; N]; N];
             for ti in 1.. {
                 let mut nxt = StateQue::new();
-                for _ in pre_pos.len()..dp.last().unwrap().len() {
-                    pre_pos.push([[Pos::new(0, 0); N]; N]);
-                }
                 for (pi, ((pre_state, _), pre_pos)) in dp
                     .last()
                     .unwrap()
@@ -6509,7 +6506,7 @@ mod solver {
                     .zip(pre_pos.iter_mut())
                     .enumerate()
                 {
-                    pre_state.propose_new(pre_pos, pi, &mut nxt, &self);
+                    pre_state.propose_new(pre_pos, &mut dist, pi, &mut nxt, &self);
                 }
                 if nxt.is_empty() {
                     break;
@@ -6520,7 +6517,7 @@ mod solver {
                         best_at = (ti, i);
                     }
                 }
-                if self.t0.elapsed().as_millis() > 2850 {
+                if self.t0.elapsed().as_millis() > 2900 {
                     break;
                 }
             }
@@ -6885,12 +6882,14 @@ mod solver {
             pub fn propose_new(
                 &self,
                 pre_pos: &mut [[Pos; N]; N],
+                dist: &mut [[i64; N]; N],
                 pi: usize,
                 nxt: &mut StateQue,
                 solver: &Solver,
             ) {
                 let mut que = VecDeque::new();
-                let mut dist = [[INF; N]; N];
+                dist.iter_mut()
+                    .for_each(|dist| dist.iter_mut().for_each(|dist| *dist = INF));
                 for y in 0..N {
                     for x in 0..N {
                         let ini = Pos::new(y, x);
