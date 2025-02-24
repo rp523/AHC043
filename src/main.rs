@@ -6330,7 +6330,7 @@ mod solver {
     const COST_HUB: i64 = 5000;
     const COST_BRIDGE: i64 = 100;
     const BEAM_WIDTH: usize = 40;
-    const SIMUL_BUILD: usize = 1;
+    const SIMUL_BUILD: usize = 2;
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
     pub struct Pos {
         y: usize,
@@ -6830,24 +6830,47 @@ mod solver {
                 solver: &Solver,
             ) -> Vec<Option<(Pos, usize)>> {
                 let mut add_ans = vec![];
-                let mut p = Pos::new(0, 0);
                 if let Some(pstate) = pstate {
+                    let mut now_finance = pstate.finance;
+                    let mut now_commute = pstate.commute.clone();
                     let mut vis = vec![vec![false; N]; N];
                     for y in 0..N {
-                        p.y = y;
                         for x in 0..N {
-                            p.x = x;
+                            let p = Pos::new(y, x);
                             if vis[y][x] || !pstate.hub_field.contains(p) {
                                 continue;
                             }
                             let mut que = VecDeque::new();
                             que.push_back(p);
+                            let mut buf = vec![];
                             while let Some(v) = que.pop_front() {
+                                // record
                                 if self.hub_field.contains(v) && !pstate.hub_field.contains(v) {
-                                    add_ans.push(Some((v, 0)));
+                                    // build hub
+                                    let mut income_delta = 0;
+                                    for &(ci, i) in solver.hub_reach[v.y][v.x].iter() {
+                                        if !now_commute.contains(ci, i) {
+                                            now_commute.set(ci, i);
+                                            if now_commute.contains(ci ^ 1, i) {
+                                                income_delta += solver.fee[i];
+                                            }
+                                        }
+                                    }
+                                    let nxt_finance =
+                                        now_finance.next(buf.len() as i64, income_delta).unwrap();
+                                    buf.push(Some((v, 0)));
+                                    for _ in (now_finance.turn..nxt_finance.turn).skip(buf.len()) {
+                                        add_ans.push(None);
+                                    }
+                                    for &x in buf.iter() {
+                                        add_ans.push(x);
+                                    }
+                                    buf.clear();
+                                    now_finance = nxt_finance;
                                 } else if self.is_bridge(v, solver) && !pstate.is_bridge(v, solver)
                                 {
-                                    add_ans.push(Some((v, self.bridge_dir(v, solver))));
+                                    // build bridge
+                                    buf.push(Some((v, self.bridge_dir(v, solver))));
                                 }
                                 for &nv in solver.near4[v.y][v.x].iter() {
                                     if vis[nv.y][nv.x] || !self.is_connected(v, nv) {
@@ -6860,14 +6883,10 @@ mod solver {
                         }
                     }
                     add_ans.reverse();
-                    for _turn in (pstate.finance.turn..self.finance.turn).skip(add_ans.len()) {
-                        add_ans.push(None);
-                    }
                 } else {
                     for y in 0..N {
-                        p.y = y;
                         for x in 0..N {
-                            p.x = x;
+                            let p = Pos::new(y, x);
                             if self.hub_field.contains(p) {
                                 add_ans.push(Some((p, 0)));
                             } else if self.is_bridge(p, solver) {
@@ -6914,7 +6933,7 @@ mod solver {
                 solver: &Solver,
             ) {
                 let mut dist = [[INF; N]; N];
-                let mut bridge = [[INF; N]; N];
+                let mut bridge = [[[INF; SIMUL_BUILD + 1]; N]; N];
                 let mut que = VecDeque::new();
                 let mut built: Vec<Vec<Vec<Vec<Pos>>>> =
                     vec![vec![vec![vec![]; SIMUL_BUILD + 1]; N]; N];
@@ -6931,15 +6950,11 @@ mod solver {
                         pre_pos[ini.y][ini.x][0] = (ini, 0);
                         finance[ini.y][ini.x][0] = self.finance;
                         dist[ini.y][ini.x] = 0;
-                        bridge[ini.y][ini.x] = 0;
+                        bridge[ini.y][ini.x][0] = 0;
                         que.push_back(ini);
                     }
                 }
                 while let Some(p0) = que.pop_front() {
-                    let b0 = bridge[p0.y][p0.x];
-                    if b0 >= N as i64 {
-                        break;
-                    }
                     let d0 = dist[p0.y][p0.x];
                     let d1 = d0 + 1;
                     let p0_is_bridge = self.is_bridge(p0, &solver);
@@ -6959,6 +6974,10 @@ mod solver {
                             continue;
                         }
                         for lv0 in 0..SIMUL_BUILD {
+                            let b0 = bridge[p0.y][p0.x][lv0];
+                            if b0 >= N as i64 {
+                                break;
+                            }
                             if finance[p0.y][p0.x][lv0] == WORST_FINANCE {
                                 continue;
                             };
@@ -6966,10 +6985,10 @@ mod solver {
                                 let b1 = b0 + if connected { 0 } else { 1 };
                                 let mut nxt_zobrist = zobrist[p0.y][p0.x][lv0];
                                 let built0 = &built[p0.y][p0.x][lv0].clone();
+                                let mut income_delta = 0;
                                 let Some(nxt_finance) = (if lv0 == lv1 {
                                     Some(finance[p0.y][p0.x][lv0])
                                 } else {
-                                    let mut income_delta = 0;
                                     for &(ci, i) in solver.hub_reach[p1.y][p1.x].iter() {
                                         if !self.commute.contains(ci, i) && built0.iter().all(|hub| 
                                             solver.hub_reach[hub.y][hub.x].iter().all(|cii| &(ci, i) != cii)
@@ -6980,13 +6999,16 @@ mod solver {
                                             }
                                         }
                                     }
-                                    finance[p0.y][p0.x][lv0].next(max(0, b1 - 1 - lv0 as i64), income_delta)
+                                    if income_delta == 0 {
+                                        continue;
+                                    }
+                                    finance[p0.y][p0.x][lv0].next(max(0, b1 - 1), income_delta)
                                 }) else {
                                     continue;
                                 };
                                 if finance[p1.y][p1.x][lv1].chmax(nxt_finance) {
                                     dist[p1.y][p1.x] = d1;
-                                    bridge[p1.y][p1.x] = b1;
+                                    bridge[p1.y][p1.x][lv1] = if lv0 == lv1 { b1 } else { 0 };
                                     pre_pos[p1.y][p1.x][lv1] = (p0, lv0);
                                     zobrist[p1.y][p1.x][lv1] = nxt_zobrist;
                                     built[p1.y][p1.x][lv1] = built0.clone();
@@ -7039,40 +7061,59 @@ mod solver {
             ) {
                 debug_assert_ne!(self.finance, nxt_finance);
                 debug_assert!(!self.hub_field.contains(nxt_hub));
-                let mut v = nxt_hub;
-                let mut lv = nxt_lv;
-                let mut add_bridge_num = 0;
-                let mut income_delta = 0;
-                loop {
-                    let (pv, plv) = pre_pos[v.y][v.x][lv];
-                    if (v, lv) == (pv, plv) {
-                        break;
-                    }
-                    if lv == plv {
-                        if !self.is_connected(v, pv) {
-                            add_bridge_num += 1;
+                let build_plan = {
+                    let mut v = nxt_hub;
+                    let mut lv = nxt_lv;
+                    let mut build_plan = vec![];
+                    loop {
+                        let (pv, plv) = pre_pos[v.y][v.x][lv];
+                        if (v, lv) == (pv, plv) {
+                            break;
                         }
-                    } else {
-                        for &(ci, i) in solver.hub_reach[v.y][v.x].iter() {
-                            if !self.commute.contains(ci, i) {
-                                self.commute.set(ci, i);
-                                self.zobrist ^= solver.hash[ci][i];
-                                if self.commute.contains(ci ^ 1, i) {
-                                    income_delta += solver.fee[i];
+                        if lv != plv {
+                            build_plan.push((v, lv));
+                        }
+                        v = pv;
+                        lv = plv;
+                    }
+                    build_plan.reverse();
+                    build_plan
+                };
+                for (ti, &(to, tlv)) in build_plan.iter().enumerate() {
+                    let (mut v, mut lv) = (to, tlv);
+                    let mut add_bridge_num = 0;
+                    let mut income_delta = 0;
+                    loop {
+                        if ti != 0 && (v, lv) == build_plan[ti - 1] {
+                            break;
+                        }
+                        let (pv, plv) = pre_pos[v.y][v.x][lv];
+                        if (v, lv) == (pv, plv) {
+                            break;
+                        }
+                        if lv == plv {
+                            if !self.is_connected(v, pv) {
+                                add_bridge_num += 1;
+                            }
+                        } else {
+                            for &(ci, i) in solver.hub_reach[v.y][v.x].iter() {
+                                if !self.commute.contains(ci, i) {
+                                    self.commute.set(ci, i);
+                                    self.zobrist ^= solver.hash[ci][i];
+                                    if self.commute.contains(ci ^ 1, i) {
+                                        income_delta += solver.fee[i];
+                                    }
                                 }
                             }
+                            self.hub_field.set(v);
                         }
+                        self.bridge_field.connect(pv, v);
+                        v = pv;
+                        lv = plv;
                     }
-                    self.bridge_field.connect(pv, v);
-                    v = pv;
-                    lv = plv;
+                    self.finance = self.finance.next(add_bridge_num, income_delta).unwrap();
                 }
-                debug_assert_eq!(
-                    Some(nxt_finance),
-                    self.finance.next(add_bridge_num, income_delta)
-                );
-                self.hub_field.set(nxt_hub);
-                self.finance = nxt_finance;
+                debug_assert_eq!(nxt_finance, self.finance);
             }
             fn is_connected(&self, p0: Pos, p1: Pos) -> bool {
                 debug_assert_eq!(1, p0.dist(&p1));
