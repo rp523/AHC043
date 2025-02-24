@@ -6556,19 +6556,23 @@ mod solver {
             self.buf.push(add_ans);
         }
         pub fn answer(self) {
+            use std::io::Write;
+            let out = std::io::stdout();
+            let mut out = std::io::BufWriter::new(out.lock());
+            macro_rules! puts {($($format:tt)*) => (let _ = writeln!(out,$($format)*););}
             let mut rem = T;
             for ans in self.buf.into_iter().rev() {
                 for ans in ans.into_iter().rev() {
                     if let Some((p, d)) = ans {
-                        println!("{d} {} {}", p.y, p.x);
+                        puts!("{d} {} {}", p.y, p.x);
                     } else {
-                        println!("-1");
+                        puts!("-1");
                     }
                     rem -= 1;
                 }
             }
             for _ in 0..rem {
-                println!("-1");
+                puts!("-1");
             }
         }
     }
